@@ -157,6 +157,10 @@ impl TodoData {
         true
     }
 
+    pub fn clear_done(&mut self) {
+        self.items.retain(|i| !i.done);
+    }
+
     pub fn get(&self, id: u64) -> Option<&TodoItem> {
         self.items.iter().find(|i| i.id == id)
     }

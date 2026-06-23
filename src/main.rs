@@ -1,5 +1,6 @@
 mod app;
 mod clip;
+mod config;
 mod data;
 mod keys;
 mod ui;
