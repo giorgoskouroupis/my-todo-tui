@@ -25,7 +25,10 @@ pub fn handle_normal(key: KeyEvent, data: &TodoData, selected_index: usize) -> O
         KeyCode::Char(' ') => {
             selected_id.map(Action::ToggleDone)
         }
-        KeyCode::Char('d') | KeyCode::Delete => {
+        KeyCode::Char('d') => {
+            selected_id.map(Action::ToggleDoing)
+        }
+        KeyCode::Delete => {
             selected_id.map(Action::DeleteItem)
         }
         KeyCode::Char('p') => {
@@ -41,7 +44,7 @@ pub fn handle_normal(key: KeyEvent, data: &TodoData, selected_index: usize) -> O
             selected_id.map(|id| Action::Reorder(id, 1))
         }
         KeyCode::Char('/') => Some(Action::StartCommand),
-        KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
+        KeyCode::Esc => None,
         _ => {
             if let KeyCode::Char(c) = key.code {
                 if !key.modifiers.contains(KeyModifiers::ALT) && !key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -153,7 +156,6 @@ pub fn handle_multiselect(key: KeyEvent, data: &TodoData, selected_index: usize)
         }
         KeyCode::Enter => Some(Action::ConfirmMultiSelect),
         KeyCode::Esc => Some(Action::CancelMultiSelect),
-        KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
 }
@@ -195,6 +197,14 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
             None
         }
         _ => {
+            if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+                match key.code {
+                    KeyCode::Char('C') => return Some(Action::Copy),
+                    KeyCode::Char('V') => return Some(Action::Paste),
+                    _ => {}
+                }
+            }
+
             if key.modifiers == KeyModifiers::CONTROL {
                 match key.code {
                     KeyCode::Left => input.move_word_left(false),
@@ -244,12 +254,27 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
     }
 }
 
+pub fn handle_confirm_delete(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Enter | KeyCode::Char('Y') | KeyCode::Char('y') => Some(Action::ConfirmDeleteYes),
+        _ => Some(Action::ConfirmDeleteNo),
+    }
+}
+
 pub fn handle_theme_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelThemePicker),
-        KeyCode::Char('q') => Some(Action::Quit),
+        _ => None,
+    }
+}
+
+pub fn handle_priority_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Esc => Some(Action::CancelPriorityPicker),
         _ => None,
     }
 }

@@ -132,7 +132,7 @@ impl Theme {
     }
 
     pub const fn theme_names() -> &'static [&'static str] {
-        &["one-dark", "catppuccin-mocha", "dracula", "nord", "gruvbox"]
+        &["catppuccin-mocha", "dracula", "gruvbox", "nord", "one-dark"]
     }
 }
 

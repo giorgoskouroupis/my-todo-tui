@@ -6,7 +6,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListState, Paragraph};
 
 use crate::app::{get_filtered_commands, Mode};
-use crate::data::TodoItem;
+use crate::data::{Priority, TodoItem};
 
 use self::input::InputBuffer;
 use self::theme::Theme;
@@ -37,6 +37,14 @@ pub fn render(
         render_cmd_completions(frame, layout[1], input, *selected, theme);
     } else if let Mode::ThemePicker { selected } = mode {
         render_theme_picker(frame, layout[1], *selected, theme);
+    } else if let Mode::PriorityPicker { selected } = mode {
+        render_priority_picker(frame, layout[1], *selected, theme);
+    } else if let Mode::Help = mode {
+        render_help_popup(frame, layout[1], theme);
+    } else if let Mode::Keybindings = mode {
+        render_keybindings_popup(frame, layout[1], theme);
+    } else if let Mode::ConfirmDelete { texts, .. } = mode {
+        render_confirm_delete_popup(frame, layout[1], texts, theme);
     }
 }
 
@@ -69,12 +77,14 @@ fn render_list(frame: &mut Frame, area: Rect, items: &[TodoItem], selected_index
         _ => None,
     };
 
+    let text_width = area.width.saturating_sub(6) as usize;
+
     let list_items: Vec<_> = items
         .iter()
         .enumerate()
         .map(|(i, item)| {
             let multi_sel = selected_ids.map_or(false, |ids| ids.contains(&item.id));
-            self::list::render_item(item, i == selected_index, multi_sel, theme)
+            self::list::render_item(item, i == selected_index, multi_sel, theme, text_width)
         })
         .collect();
 
@@ -98,7 +108,8 @@ fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, se
     }
 
     let height = matches.len().min(8) as u16 + 2;
-    let width = 48;
+    let cmd_width = 12usize;
+    let width = (cmd_width + 30) as u16;
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
@@ -118,7 +129,7 @@ fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, se
         lines.push(
             Line::from(vec![
                 Span::styled(
-                    format!("  /{:<8}", cmd),
+                    format!("  /{:<1$}", cmd, cmd_width),
                     Style::default()
                         .fg(theme.accent)
                         .add_modifier(if highlighted { Modifier::BOLD } else { Modifier::empty() }),
@@ -201,6 +212,287 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
     frame.render_widget(paragraph, popup_area);
 }
 
+fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
+    let items: [(&str, Option<Priority>); 5] = [
+        ("All priorities", None),
+        ("Urgent", Some(Priority::Urgent)),
+        ("High", Some(Priority::High)),
+        ("Normal", Some(Priority::Normal)),
+        ("Low", Some(Priority::Low)),
+    ];
+    let height = items.len() as u16 + 2;
+    let width = 24;
+    let popup_y = area.bottom().saturating_sub(height + 1);
+    let popup_x = area.x + 2;
+
+    let popup_area = Rect::new(
+        popup_x,
+        popup_y.min(area.bottom().saturating_sub(height)),
+        width,
+        height,
+    );
+
+    let mut lines = Vec::new();
+    for (i, (label, _)) in items.iter().enumerate() {
+        let is_highlighted = i == selected;
+        let bg = if is_highlighted { theme.bg_tertiary } else { theme.bg_primary };
+
+        lines.push(
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    label.to_string(),
+                    Style::default()
+                        .fg(theme.text_primary)
+                        .add_modifier(if is_highlighted { Modifier::BOLD } else { Modifier::empty() }),
+                ),
+                Span::raw("  "),
+            ])
+            .style(Style::default().bg(bg)),
+        );
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_default))
+        .title(" Priorities ")
+        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(theme.bg_primary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_primary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  Welcome to ", Style::default().fg(theme.text_primary)),
+            Span::styled("todo-tui", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            Span::raw(" v0.1.0"),
+        ]).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /command or /<alias> — run a command", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /help           — this screen", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /keybindings    — show all keybindings", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /priorities     — filter by priority", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /search <q>     — filter items by text", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /delete         — bulk delete (multi-select)", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /done           — bulk toggle done", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /clear          — clear completed items", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  /themes         — pick a theme", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled("  Tab autocompletes commands, Esc cancels", Style::default().fg(theme.text_muted))).style(Style::default().bg(theme.bg_secondary)),
+    ];
+
+    let width = 48;
+    let height = lines.len() as u16 + 2;
+    let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, width, height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(" Help ")
+        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(theme.bg_secondary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_secondary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let key_lines = [
+        ("Normal", "", true),
+        ("j/k or ↑/↓", "Navigate", false),
+        ("Enter", "Edit item / create new", false),
+        ("Space", "Toggle done", false),
+        ("d", "Toggle doing", false),
+        ("Delete", "Delete item", false),
+        ("p / P or Tab", "Cycle priority", false),
+        ("Alt+↑/↓", "Reorder item", false),
+        ("/", "Command mode", false),
+        ("q/Esc", "Quit", false),
+        ("", "", false),
+        ("Editing", "", true),
+        ("Enter", "Submit", false),
+        ("Esc", "Cancel", false),
+        ("←/→, Home/End", "Move cursor", false),
+        ("Shift+←/→", "Select text", false),
+        ("Ctrl+←/→", "Word jump", false),
+        ("Ctrl+Shift+C", "Copy selection", false),
+        ("Ctrl+Shift+V", "Paste", false),
+    ];
+
+    let mut lines = Vec::new();
+    for (key, desc, is_header) in &key_lines {
+        if *is_header {
+            lines.push(
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        key.to_string(),
+                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    ),
+                ])
+                .style(Style::default().bg(theme.bg_secondary)),
+            );
+        } else if key.is_empty() {
+            lines.push(Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)));
+        } else {
+            lines.push(
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        format!("{:<20}", key),
+                        Style::default().fg(theme.text_secondary),
+                    ),
+                    Span::styled(desc.to_string(), Style::default().fg(theme.text_primary)),
+                ])
+                .style(Style::default().bg(theme.bg_secondary)),
+            );
+        }
+    }
+
+    let width = 52;
+    let height = lines.len() as u16 + 2;
+    let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, width, height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(" Keybindings ")
+        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(theme.bg_secondary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_secondary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], theme: &Theme) {
+    let max_content_w = (area.width.saturating_sub(6)).min(60).max(20) as usize;
+
+    let mut lines_text: Vec<String> = Vec::new();
+    if texts.len() == 1 {
+        lines_text.push("Are you sure you want to delete?".into());
+        for wrapped in wrap_text(&format!("\"{}\"", &texts[0]), max_content_w.saturating_sub(2)) {
+            lines_text.push(format!("  {wrapped}"));
+        }
+    } else {
+        lines_text.push(format!("Are you sure you want to delete these {} items?", texts.len()));
+        for t in texts {
+            for wrapped in wrap_text(&format!("\"{t}\""), max_content_w.saturating_sub(2)) {
+                lines_text.push(format!("  {wrapped}"));
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    for txt in &lines_text {
+        lines.push(
+            Line::from(Span::styled(
+                txt.clone(),
+                Style::default().fg(theme.text_primary),
+            ))
+            .style(Style::default().bg(theme.bg_secondary)),
+        );
+    }
+    // blank line
+    lines.push(Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)));
+    // Y/n prompt
+    lines.push(
+        Line::from(vec![
+            Span::styled(
+                "(",
+                Style::default().fg(theme.text_muted),
+            ),
+            Span::styled(
+                "Y",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "/n)",
+                Style::default().fg(theme.text_muted),
+            ),
+        ])
+        .style(Style::default().bg(theme.bg_secondary)),
+    );
+
+    let content_width = lines_text
+        .iter()
+        .map(|l| l.len() as u16)
+        .max()
+        .unwrap_or(0)
+        .max(30)
+        + 4;
+    let width = content_width.min(area.width.saturating_sub(4)).max(30);
+    let height = lines.len() as u16 + 2;
+    let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, width, height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(" Confirm Delete ")
+        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(theme.bg_secondary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(theme.bg_secondary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_width {
+        return vec![s.to_string()];
+    }
+    let mut result = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if start + max_width >= chars.len() {
+            result.push(chars[start..].iter().collect());
+            break;
+        }
+        let end = start + max_width;
+        // Find last space within max_width to break at word boundary
+        if let Some(offset) = chars[start..end].iter().rposition(|c| *c == ' ') {
+            let pos = start + offset;
+            result.push(chars[start..pos].iter().collect());
+            start = pos + 1; // skip the space
+        } else {
+            // No space found, hard break
+            result.push(chars[start..end].iter().collect());
+            start = end;
+        }
+    }
+    result
+}
+
 fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode, filter: &str, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::TOP)
@@ -264,6 +556,42 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             let line = Line::from(vec![
                 Span::styled(
                     "  [up/down: navigate, Enter: select theme, Esc: cancel]",
+                    Style::default().fg(theme.warning),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::ConfirmDelete { .. } => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Y/Enter to confirm, any other key to cancel",
+                    Style::default().fg(theme.warning),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::PriorityPicker { .. } => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  [up/down: navigate, Enter: select priority, Esc: cancel]",
+                    Style::default().fg(theme.warning),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::Help => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Esc to close help",
+                    Style::default().fg(theme.warning),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::Keybindings => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Esc to close keybindings",
                     Style::default().fg(theme.warning),
                 ),
             ]);

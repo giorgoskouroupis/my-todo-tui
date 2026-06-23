@@ -33,14 +33,6 @@ impl Priority {
         }
     }
 
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Normal => "medium",
-            Self::High => "high",
-            Self::Urgent => "urgent",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +40,7 @@ pub struct TodoItem {
     pub id: u64,
     pub text: String,
     pub done: bool,
+    pub doing: bool,
     pub priority: Priority,
     pub order: u64,
 }
@@ -93,6 +86,7 @@ impl TodoData {
             id,
             text: text.to_string(),
             done: false,
+            doing: false,
             priority: Priority::Normal,
             order,
         });
@@ -117,6 +111,18 @@ impl TodoData {
     pub fn toggle_done(&mut self, id: u64) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             item.done = !item.done;
+            if item.done {
+                item.doing = false;
+            }
+        }
+    }
+
+    pub fn toggle_doing(&mut self, id: u64) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.doing = !item.doing;
+            if item.doing {
+                item.done = false;
+            }
         }
     }
 

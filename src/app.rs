@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, Stdout};
 
 use crate::clip::Clipboard;
 use crate::config;
-use crate::data::{TodoData, TodoItem};
+use crate::data::{TodoData, TodoItem, Priority};
 use crate::keys;
 use crate::ui::input::InputBuffer;
 use crate::ui::theme::Theme;
@@ -25,6 +25,10 @@ pub enum Mode {
     Searching,
     MultiSelect { cmd: MultiSelectCmd, selected: HashSet<u64> },
     ThemePicker { selected: usize },
+    PriorityPicker { selected: usize },
+    Help,
+    Keybindings,
+    ConfirmDelete { ids: Vec<u64>, texts: Vec<String> },
 }
 
 pub enum Action {
@@ -36,6 +40,7 @@ pub enum Action {
     SubmitEdit,
     CancelEdit,
     ToggleDone(u64),
+    ToggleDoing(u64),
     DeleteItem(u64),
     CyclePriority(u64, bool),
     Reorder(u64, i32),
@@ -49,6 +54,12 @@ pub enum Action {
     CancelMultiSelect,
     ThemeSelect(usize),
     CancelThemePicker,
+    ConfirmDeleteYes,
+    ConfirmDeleteNo,
+    PrioritySelect(usize),
+    CancelPriorityPicker,
+    Copy,
+    Paste,
     Quit,
 }
 
@@ -59,6 +70,7 @@ pub struct App {
     pub mode: Mode,
     pub clip: Clipboard,
     pub filter: String,
+    pub priority_filter: Option<Priority>,
     pub theme: Theme,
     pub completions: Vec<String>,
     pub completion_index: usize,
@@ -75,6 +87,7 @@ impl App {
             mode: Mode::Normal,
             clip: Clipboard::new(),
             filter: String::new(),
+            priority_filter: None,
             theme,
             completions: Vec::new(),
             completion_index: 0,
@@ -83,6 +96,10 @@ impl App {
 
     pub fn items(&self) -> Vec<TodoItem> {
         let items = self.data.items().to_vec();
+        let items: Vec<TodoItem> = match self.priority_filter {
+            Some(p) => items.into_iter().filter(|i| i.priority == p).collect(),
+            None => items,
+        };
         if self.filter.is_empty() {
             items
         } else {
@@ -149,6 +166,9 @@ impl App {
         if key.code == KeyCode::Char('/') && !matches!(self.mode, Mode::Command { .. }) {
             return Some(Action::StartCommand);
         }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Some(Action::Quit);
+        }
         match &self.mode {
             Mode::Normal => {
                 keys::handle_normal(key, &self.data, self.selected_index)
@@ -202,6 +222,18 @@ impl App {
                 }
                 action
             }
+            Mode::PriorityPicker { selected } => {
+                let action = keys::handle_priority_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::PrioritySelect(*selected));
+                }
+                action
+            }
+            Mode::ConfirmDelete { .. } => keys::handle_confirm_delete(key),
+            Mode::Help | Mode::Keybindings => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
+                _ => None,
+            },
         }
     }
 
@@ -213,6 +245,10 @@ impl App {
                         *selected -= 1;
                     }
                 } else if let Mode::ThemePicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::PriorityPicker { ref mut selected } = &mut self.mode {
                     if *selected > 0 {
                         *selected -= 1;
                     }
@@ -228,6 +264,11 @@ impl App {
                     }
                 } else if let Mode::ThemePicker { ref mut selected } = &mut self.mode {
                     let max = Theme::theme_names().len().saturating_sub(1);
+                    if *selected < max {
+                        *selected += 1;
+                    }
+                } else if let Mode::PriorityPicker { ref mut selected } = &mut self.mode {
+                    let max = 4usize;
                     if *selected < max {
                         *selected += 1;
                     }
@@ -287,12 +328,17 @@ impl App {
                 self.data.toggle_done(id);
                 self.data.save();
             }
+            Action::ToggleDoing(id) => {
+                self.data.toggle_doing(id);
+                self.data.save();
+            }
             Action::DeleteItem(id) => {
-                if let Some(item) = self.data.delete(id) {
-                    self.clip.cut(item);
-                    self.data.save();
+                if let Some(item) = self.data.get(id) {
+                    self.mode = Mode::ConfirmDelete {
+                        ids: vec![id],
+                        texts: vec![item.text.clone()],
+                    };
                 }
-                self.clamp_selection();
             }
             Action::CyclePriority(id, forward) => {
                 self.data.cycle_priority(id, forward);
@@ -373,6 +419,15 @@ impl App {
                     "themes" => {
                         self.mode = Mode::ThemePicker { selected: 0 };
                     }
+                    "priorities" | "p" => {
+                        self.mode = Mode::PriorityPicker { selected: 0 };
+                    }
+                    "help" => {
+                        self.mode = Mode::Help;
+                    }
+                    "keybindings" | "k" => {
+                        self.mode = Mode::Keybindings;
+                    }
                     _ => {
                         self.mode = Mode::Normal;
                     }
@@ -427,6 +482,50 @@ impl App {
             Action::CancelThemePicker => {
                 self.mode = Mode::Normal;
             }
+            Action::ConfirmDeleteYes => {
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                if let Mode::ConfirmDelete { ids, .. } = mode {
+                    for id in ids {
+                        if let Some(item) = self.data.delete(id) {
+                            self.clip.cut(item);
+                        }
+                    }
+                    self.data.save();
+                }
+                self.clamp_selection();
+            }
+            Action::ConfirmDeleteNo => {
+                self.mode = Mode::Normal;
+            }
+            Action::PrioritySelect(idx) => {
+                const PRIORITIES: [Option<Priority>; 5] = [
+                    None,
+                    Some(Priority::Urgent),
+                    Some(Priority::High),
+                    Some(Priority::Normal),
+                    Some(Priority::Low),
+                ];
+                self.priority_filter = PRIORITIES[idx];
+                self.mode = Mode::Normal;
+                self.clamp_selection();
+            }
+            Action::CancelPriorityPicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::Copy => {
+                if let Some(text) = self.input.selected_text() {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
+            }
+            Action::Paste => {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    if let Ok(text) = cb.get_text() {
+                        self.input.insert_str(&text);
+                    }
+                }
+            }
             Action::Quit => return true,
         }
 
@@ -435,15 +534,19 @@ impl App {
 }
 
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("search", "Filter items by text"),
-    ("s", "Alias for search"),
-    ("delete", "Bulk delete items"),
-    ("d", "Alias for delete"),
-    ("done", "Bulk toggle done"),
-    ("x", "Alias for done"),
     ("clear", "Clear completed items"),
     ("c", "Alias for clear"),
+    ("delete", "Bulk delete items"),
+    ("done", "Bulk toggle done"),
+    ("d", "Alias for delete"),
+    ("help", "Show help"),
+    ("keybindings", "Show keybindings"),
+    ("priorities", "Filter by priority"),
+    ("p", "Alias for priorities"),
+    ("search", "Filter items by text"),
+    ("s", "Alias for search"),
     ("themes", "List available themes"),
+    ("x", "Alias for done"),
 ];
 
 pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
@@ -457,7 +560,7 @@ pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> 
 pub fn get_command_list() -> Vec<(&'static str, &'static str)> {
     COMMANDS
         .iter()
-        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c"))
+        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k"))
         .copied()
         .collect()
 }
