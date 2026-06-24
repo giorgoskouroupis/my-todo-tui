@@ -46,7 +46,7 @@ pub enum Mode {
     CategoryPicker { selected: usize },
     CategoryAdd,
     SortPicker { selected: usize },
-    DueDateInput { edit_id: Option<u64> },
+    DueDateInput { edit_id: Option<u64>, saved_text: String, from_new: bool, from_normal: bool },
 }
 
 pub enum Action {
@@ -274,6 +274,13 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
         }
+        if key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(&self.mode, Mode::Normal) && self.pane == Pane::Items {
+                if self.selected_index() < self.items().len() {
+                    return Some(Action::SetDueDate);
+                }
+            }
+        }
 
         let is_pane_mode = matches!(self.mode, Mode::Normal | Mode::MultiSelect { .. });
         if is_pane_mode {
@@ -496,6 +503,7 @@ impl App {
                 }
             }
             Action::SubmitEdit => {
+                let mut created_id = None;
                 match &self.mode {
                     Mode::Editing { edit_id } => {
                         let text = self.input.text().to_string();
@@ -505,6 +513,7 @@ impl App {
                             match edit_id {
                                 None => {
                                     let id = self.data.add(&text);
+                                    self.mark_dirty();
                                     if let Some(ref cat) = self.category_filter {
                                         self.data.set_category(id, Some(cat.clone()));
                                         let cats = self.data.categories();
@@ -516,12 +525,13 @@ impl App {
                                         self.data.set_due_date(id, Some(date.clone()));
                                     }
                                     self.pending_due_date = None;
+                                    created_id = Some(id);
                                 }
                                 Some(id) => {
                                     self.data.update_text(*id, &text);
+                                    self.mark_dirty();
                                 }
                             }
-                            self.mark_dirty();
                         } else if edit_id.is_none() {
                             if let Some(ref cat) = self.category_filter {
                                 if !self.data.categories().contains(cat) {
@@ -534,9 +544,14 @@ impl App {
                     }
                     _ => {}
                 }
-                self.input.clear();
-                self.mode = Mode::Normal;
-                self.clamp_selection();
+                if let Some(id) = created_id {
+                    self.input.clear();
+                    self.mode = Mode::DueDateInput { edit_id: Some(id), saved_text: String::new(), from_new: true, from_normal: false };
+                } else {
+                    self.input.clear();
+                    self.mode = Mode::Normal;
+                    self.clamp_selection();
+                }
             }
             Action::CancelEdit => {
                 self.input.clear();
@@ -804,19 +819,23 @@ impl App {
                 }
             }
             Action::SetDueDate => {
-                let edit_id = match &self.mode {
-                    Mode::Editing { edit_id } => *edit_id,
+                let (edit_id, from_normal) = match &self.mode {
+                    Mode::Editing { edit_id } => (*edit_id, false),
+                    Mode::Normal => {
+                        (self.items().get(self.selected_index()).map(|i| i.id), true)
+                    }
                     _ => return false,
                 };
+                let saved_text = self.input.text().to_string();
                 self.input.clear();
-                self.mode = Mode::DueDateInput { edit_id };
+                self.mode = Mode::DueDateInput { edit_id, saved_text, from_new: false, from_normal };
             }
             Action::SubmitDueDate => {
                 let text = self.input.text().to_string();
                 let text = text.trim().to_string();
-                let edit_id = match &self.mode {
-                    Mode::DueDateInput { edit_id } => *edit_id,
-                    _ => None,
+                let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
+                    Mode::DueDateInput { edit_id, saved_text, from_new, from_normal } => (*edit_id, saved_text.clone(), *from_new, *from_normal),
+                    _ => (None, String::new(), false, false),
                 };
                 if !text.is_empty() {
                     if let Some(id) = edit_id {
@@ -826,16 +845,28 @@ impl App {
                         self.pending_due_date = Some(text);
                     }
                 }
-                self.input.clear();
-                self.mode = Mode::Editing { edit_id };
+                if from_new || from_normal {
+                    self.input.clear();
+                    self.mode = Mode::Normal;
+                    self.clamp_selection();
+                } else {
+                    self.input.set_text(&saved_text);
+                    self.mode = Mode::Editing { edit_id };
+                }
             }
             Action::CancelDueDate => {
-                let edit_id = match &self.mode {
-                    Mode::DueDateInput { edit_id } => *edit_id,
-                    _ => None,
+                let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
+                    Mode::DueDateInput { edit_id, saved_text, from_new, from_normal } => (*edit_id, saved_text.clone(), *from_new, *from_normal),
+                    _ => (None, String::new(), false, false),
                 };
-                self.input.clear();
-                self.mode = Mode::Editing { edit_id };
+                if from_new || from_normal {
+                    self.input.clear();
+                    self.mode = Mode::Normal;
+                    self.clamp_selection();
+                } else {
+                    self.input.set_text(&saved_text);
+                    self.mode = Mode::Editing { edit_id };
+                }
             }
             Action::SwitchPane => {
                 self.pane = match self.pane {

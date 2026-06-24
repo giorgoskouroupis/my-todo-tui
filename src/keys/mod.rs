@@ -25,7 +25,7 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
         KeyCode::Char(' ') => {
             selected_id.map(Action::ToggleDone)
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('d') if key.modifiers.is_empty() => {
             selected_id.map(Action::ToggleDoing)
         }
         KeyCode::Delete => {
@@ -467,6 +467,38 @@ pub fn handle_due_date_input(key: KeyEvent, input: &mut crate::ui::input::InputB
             None
         }
         _ => {
+            if key.modifiers == KeyModifiers::CONTROL {
+                match key.code {
+                    KeyCode::Left => input.move_word_left(false),
+                    KeyCode::Right => input.move_word_right(false),
+                    KeyCode::Char('a') => input.move_home(false),
+                    KeyCode::Char('e') => input.move_end(false),
+                    KeyCode::Char('w') => input.delete_word_back(),
+                    _ => {}
+                }
+                return None;
+            }
+
+            if key.modifiers == KeyModifiers::SHIFT {
+                match key.code {
+                    KeyCode::Left => input.move_left(true),
+                    KeyCode::Right => input.move_right(true),
+                    KeyCode::Home => input.move_home(true),
+                    KeyCode::End => input.move_end(true),
+                    _ => {}
+                }
+                return None;
+            }
+
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                match key.code {
+                    KeyCode::Left => input.move_word_left(false),
+                    KeyCode::Right => input.move_word_right(false),
+                    _ => {}
+                }
+                return None;
+            }
+
             if let KeyCode::Char(c) = key.code {
                 if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
                     input.insert_char(c);

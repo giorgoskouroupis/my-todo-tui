@@ -769,13 +769,9 @@ pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
 }
 
 fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode, filter: &str, theme: &Theme) {
-    let mut block = Block::default()
+    let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.border_default));
-
-    if matches!(mode, Mode::Editing { .. }) {
-        block = block.title_bottom(" Ctrl+D: due date ");
-    }
 
     let (display_text, cursor_pos) = match mode {
         Mode::Searching => {
@@ -923,21 +919,38 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
         }
         Mode::DueDateInput { .. } => {
             let text = input.text();
-            let line = Line::from(vec![
-                Span::styled(
-                    "  Due date (YYYY-MM-DD): ",
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(
-                    if text.is_empty() { "\u{2588}" } else { text },
-                    Style::default().fg(theme.text_primary),
-                ),
-                Span::styled(
-                    if text.is_empty() { "" } else { "\u{2588}" },
-                    Style::default().fg(theme.accent),
-                ),
-            ]);
-            (line, None)
+            let cursor = input.cursor();
+            let spans = if text.is_empty() {
+                vec![
+                    Span::styled(
+                        "  Due date (YYYY-MM-DD): ",
+                        Style::default().fg(theme.accent),
+                    ),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                ]
+            } else if cursor == 0 {
+                vec![
+                    Span::styled(
+                        "  Due date (YYYY-MM-DD): ",
+                        Style::default().fg(theme.accent),
+                    ),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled(text, Style::default().fg(theme.text_primary)),
+                ]
+            } else {
+                let before = &text[..cursor];
+                let after = &text[cursor..];
+                vec![
+                    Span::styled(
+                        "  Due date (YYYY-MM-DD): ",
+                        Style::default().fg(theme.accent),
+                    ),
+                    Span::styled(before, Style::default().fg(theme.text_primary)),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled(after, Style::default().fg(theme.text_primary)),
+                ]
+            };
+            (Line::from(spans), None)
         }
         Mode::Editing { .. } => {
             let text = input.text();
