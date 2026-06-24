@@ -52,6 +52,8 @@ pub struct TodoItem {
 pub struct TodoData {
     next_id: u64,
     items: Vec<TodoItem>,
+    #[serde(default)]
+    categories: Vec<String>,
 }
 
 impl TodoData {
@@ -59,6 +61,7 @@ impl TodoData {
         Self {
             next_id: 1,
             items: Vec::new(),
+            categories: Vec::new(),
         }
     }
 
@@ -158,13 +161,26 @@ impl TodoData {
         let mut cats: Vec<String> = self.items.iter()
             .filter_map(|i| i.category.clone())
             .collect();
+        cats.extend(self.categories.iter().cloned());
         cats.sort();
         cats.dedup();
         cats
     }
 
+    pub fn add_category(&mut self, name: &str) {
+        if !self.categories.contains(&name.to_string()) {
+            self.categories.push(name.to_string());
+        }
+    }
+
+    pub fn remove_category(&mut self, name: &str) {
+        self.categories.retain(|c| c != name);
+    }
+
+    #[allow(dead_code)]
     pub fn delete_category(&mut self, name: &str) {
         self.items.retain(|i| i.category.as_deref() != Some(name));
+        self.categories.retain(|c| c != name);
     }
 
     pub fn cycle_priority(&mut self, id: u64, forward: bool) {

@@ -103,66 +103,39 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
         .fg(theme.accent)
         .add_modifier(Modifier::UNDERLINED);
 
-    let star = if item.pinned { "\u{2605} " } else { "" };
-    let star_style = if item.pinned {
-        Style::default().fg(theme.warning)
-    } else {
-        Style::default()
-    };
-
-    if item.done {
-        let wrapped = super::wrap_text(&item.text, text_width.max(10));
-        let mut lines = Vec::new();
-        for (i, seg) in wrapped.iter().enumerate() {
-            if i == 0 {
-                let mut spans = vec![
-                    Span::raw(" "),
-                    Span::styled("\u{2713} ", Style::default().fg(theme.success)),
-                ];
-                if item.pinned {
-                    spans.push(Span::styled(star, star_style));
-                }
-                spans.extend(highlight_matches(seg, filter, title_style, match_style));
-                spans.push(Span::raw(" "));
-                lines.push(Line::from(spans));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled(seg.clone(), title_style),
-                ]));
-            }
-        }
-        lines.push(Line::from(Span::raw("")));
-        return ListItem::new(Text::from(lines)).style(Style::default().bg(base_bg));
-    }
-
-    let circle = if item.doing { "\u{25cf} " } else { "\u{25cb} " };
-    let circle_color = if item.doing { theme.accent } else { theme.text_primary };
     let diamond = "\u{25c6}";
     let diamond_color = priority_color(item.priority, theme);
 
     let wrapped = super::wrap_text(&item.text, text_width.max(10));
     let mut lines = Vec::new();
+
+    // Line 1: bullet, priority, pin, due date
+    let mut line1 = vec![Span::raw(" ")];
+    if item.done {
+        line1.push(Span::styled("\u{2713}", Style::default().fg(theme.success)));
+    } else {
+        let circle = if item.doing { "\u{25cf}" } else { "\u{25cb}" };
+        let circle_color = if item.doing { theme.accent } else { theme.text_primary };
+        line1.push(Span::styled(circle, Style::default().fg(circle_color)));
+    }
+    line1.push(Span::raw(" "));
+    line1.push(Span::styled(diamond, Style::default().fg(diamond_color)));
+    if item.pinned {
+        line1.push(Span::raw(" \u{1F4CC}"));
+    }
+    if let Some(ref date) = item.due_date {
+        let date_color = if is_overdue_item { theme.error } else { theme.text_muted };
+        line1.push(Span::raw(" \u{1F4C5} "));
+        line1.push(Span::styled(date.clone(), Style::default().fg(date_color)));
+    }
+    line1.push(Span::raw(" "));
+    lines.push(Line::from(line1));
+
+    // Line 2+: text at char 4
     for (i, seg) in wrapped.iter().enumerate() {
+        let mut spans = vec![Span::raw("   ")];
         if i == 0 {
-            let mut spans = vec![
-                Span::raw(" "),
-                Span::styled(circle, Style::default().fg(circle_color)),
-                Span::styled(diamond, Style::default().fg(diamond_color)),
-                Span::raw(" "),
-            ];
-            if item.pinned {
-                spans.push(Span::styled(star, star_style));
-            }
             spans.extend(highlight_matches(seg, filter, title_style, match_style));
-            if let Some(ref date) = item.due_date {
-                spans.push(Span::raw(" "));
-                let date_color = if is_overdue_item { theme.error } else { theme.text_muted };
-                spans.push(Span::styled(
-                    format!("@{}", date),
-                    Style::default().fg(date_color),
-                ));
-            }
             if let Some(ref cat) = item.category {
                 if !hide_category_badge {
                     spans.push(Span::raw(" "));
@@ -173,14 +146,13 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
                 }
             }
             spans.push(Span::raw(" "));
-            lines.push(Line::from(spans));
         } else {
-            lines.push(Line::from(vec![
-                Span::raw("   "),
-                Span::styled(seg.clone(), title_style),
-            ]));
+            spans.push(Span::styled(seg.clone(), title_style));
         }
+        lines.push(Line::from(spans));
     }
+
+    // Line last: empty
     lines.push(Line::from(Span::raw("")));
 
     ListItem::new(Text::from(lines)).style(Style::default().bg(base_bg))

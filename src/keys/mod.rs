@@ -209,7 +209,7 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
             None
         }
         _ => {
-            if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('d') {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
                 return Some(Action::SetDueDate);
             }
 
@@ -273,7 +273,8 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
 pub fn handle_confirm_delete(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Enter | KeyCode::Char('Y') | KeyCode::Char('y') => Some(Action::ConfirmDeleteYes),
-        _ => Some(Action::ConfirmDeleteNo),
+        KeyCode::Char('N') | KeyCode::Char('n') => Some(Action::ConfirmDeleteNo),
+        _ => None,
     }
 }
 
@@ -423,6 +424,56 @@ pub fn handle_sort_picker(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('n') => Some(Action::SortSelect(2)),
         KeyCode::Esc => Some(Action::CancelSortPicker),
         _ => None,
+    }
+}
+
+pub fn handle_due_date_input(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) -> Option<Action> {
+    match key.code {
+        KeyCode::Enter => Some(Action::SubmitDueDate),
+        KeyCode::Esc => {
+            input.clear();
+            Some(Action::CancelDueDate)
+        }
+        KeyCode::Backspace => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                input.delete_word_back();
+            } else {
+                input.backspace();
+            }
+            None
+        }
+        KeyCode::Delete => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                input.delete_word_forward();
+            } else {
+                input.delete();
+            }
+            None
+        }
+        KeyCode::Left => {
+            input.move_left(key.modifiers.contains(KeyModifiers::SHIFT));
+            None
+        }
+        KeyCode::Right => {
+            input.move_right(key.modifiers.contains(KeyModifiers::SHIFT));
+            None
+        }
+        KeyCode::Home => {
+            input.move_home(key.modifiers.contains(KeyModifiers::SHIFT));
+            None
+        }
+        KeyCode::End => {
+            input.move_end(key.modifiers.contains(KeyModifiers::SHIFT));
+            None
+        }
+        _ => {
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
+                    input.insert_char(c);
+                }
+            }
+            None
+        }
     }
 }
 

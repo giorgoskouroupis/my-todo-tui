@@ -584,7 +584,8 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("p / P", "Cycle priority", false),
         ("Alt+↑/↓", "Reorder item", false),
         ("u", "Undo delete", false),
-        ("s", "Toggle pin", false),
+        ("*", "Toggle pin", false),
+        ("s", "Sort picker", false),
         ("←/→", "Switch pane", false),
         ("Ctrl+K", "Assign category", false),
         ("/", "Command mode", false),
@@ -768,9 +769,13 @@ pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
 }
 
 fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode, filter: &str, theme: &Theme) {
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.border_default));
+
+    if matches!(mode, Mode::Editing { .. }) {
+        block = block.title_bottom(" Ctrl+D: due date ");
+    }
 
     let (display_text, cursor_pos) = match mode {
         Mode::Searching => {
@@ -906,6 +911,54 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
                 ),
             ]);
             (line, None)
+        }
+        Mode::SortPicker { .. } => {
+            let line = Line::from(vec![
+                Span::styled(
+                    "  [p: priority, d: due date, n: none, Enter: select, Esc: cancel]",
+                    Style::default().fg(theme.warning),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::DueDateInput { .. } => {
+            let text = input.text();
+            let line = Line::from(vec![
+                Span::styled(
+                    "  Due date (YYYY-MM-DD): ",
+                    Style::default().fg(theme.accent),
+                ),
+                Span::styled(
+                    if text.is_empty() { "\u{2588}" } else { text },
+                    Style::default().fg(theme.text_primary),
+                ),
+                Span::styled(
+                    if text.is_empty() { "" } else { "\u{2588}" },
+                    Style::default().fg(theme.accent),
+                ),
+            ]);
+            (line, None)
+        }
+        Mode::Editing { .. } => {
+            let text = input.text();
+            let cursor = input.cursor();
+            let spans = if cursor == 0 {
+                vec![
+                    Span::raw("  "),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled(text, Style::default().fg(theme.text_primary)),
+                ]
+            } else {
+                let before = &text[..cursor];
+                let after = &text[cursor..];
+                vec![
+                    Span::raw("  "),
+                    Span::styled(before, Style::default().fg(theme.text_primary)),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled(after, Style::default().fg(theme.text_primary)),
+                ]
+            };
+            (Line::from(spans), None)
         }
         _ if input.is_empty() && matches!(mode, Mode::Normal) => {
             let placeholder = Line::from(vec![

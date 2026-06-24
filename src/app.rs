@@ -42,10 +42,11 @@ pub enum Mode {
     PriorityPicker { selected: usize },
     Help,
     Keybindings,
-    ConfirmDelete { ids: Vec<u64>, texts: Vec<String> },
+    ConfirmDelete { ids: Vec<u64>, texts: Vec<String>, category_name: Option<String> },
     CategoryPicker { selected: usize },
     CategoryAdd,
     SortPicker { selected: usize },
+    DueDateInput { edit_id: Option<u64> },
 }
 
 pub enum Action {
@@ -93,6 +94,8 @@ pub enum Action {
     StartSortPicker,
     SortSelect(usize),
     CancelSortPicker,
+    SubmitDueDate,
+    CancelDueDate,
     Quit,
 }
 
@@ -113,6 +116,7 @@ pub struct App {
     pub completion_index: usize,
     pub dirty: bool,
     pub last_mutated: Instant,
+    pub pending_due_date: Option<String>,
 }
 
 impl App {
@@ -136,6 +140,7 @@ impl App {
             completion_index: 0,
             dirty: false,
             last_mutated: Instant::now(),
+            pending_due_date: None,
         }
     }
 
@@ -146,21 +151,13 @@ impl App {
         }
     }
 
-    fn active_category(&self) -> Option<String> {
-        let cats = self.data.categories();
-        if self.category_index == 0 || self.category_index > cats.len() {
-            return None;
-        }
-        cats.get(self.category_index - 1).cloned()
-    }
-
     pub fn items(&self) -> Vec<TodoItem> {
         let items = self.data.items().to_vec();
         let items: Vec<TodoItem> = match self.priority_filter {
             Some(p) => items.into_iter().filter(|i| i.priority == p).collect(),
             None => items,
         };
-        let items: Vec<TodoItem> = match self.active_category() {
+        let items: Vec<TodoItem> = match &self.category_filter {
             Some(cat) => items.into_iter().filter(|i| i.category.as_deref() == Some(cat.as_str())).collect(),
             None => items,
         };
@@ -393,6 +390,9 @@ impl App {
                 action
             }
             Mode::ConfirmDelete { .. } => keys::handle_confirm_delete(key),
+            Mode::DueDateInput { .. } => {
+                keys::handle_due_date_input(key, &mut self.input)
+            }
             Mode::Help | Mode::Keybindings => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
                 _ => None,
@@ -416,6 +416,10 @@ impl App {
                         *selected -= 1;
                     }
                 } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::CategoryPicker { ref mut selected } = &mut self.mode {
                     if *selected > 0 {
                         *selected -= 1;
                     }
@@ -453,6 +457,11 @@ impl App {
                 } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
                     let max = 2usize;
                     if *selected < max {
+                        *selected += 1;
+                    }
+                } else if let Mode::CategoryPicker { ref mut selected } = &mut self.mode {
+                    let cats = self.data.categories();
+                    if *selected < cats.len() {
                         *selected += 1;
                     }
                 } else if self.pane == Pane::Categories {
@@ -496,15 +505,31 @@ impl App {
                             match edit_id {
                                 None => {
                                     let id = self.data.add(&text);
-                                    if let Some(cat) = &self.category_filter {
+                                    if let Some(ref cat) = self.category_filter {
                                         self.data.set_category(id, Some(cat.clone()));
+                                        let cats = self.data.categories();
+                                        if let Some(pos) = cats.iter().position(|c| c == cat) {
+                                            self.category_index = pos + 1;
+                                        }
                                     }
+                                    if let Some(ref date) = self.pending_due_date {
+                                        self.data.set_due_date(id, Some(date.clone()));
+                                    }
+                                    self.pending_due_date = None;
                                 }
                                 Some(id) => {
                                     self.data.update_text(*id, &text);
                                 }
                             }
                             self.mark_dirty();
+                        } else if edit_id.is_none() {
+                            if let Some(ref cat) = self.category_filter {
+                                if !self.data.categories().contains(cat) {
+                                    self.category_filter = None;
+                                    self.category_index = 0;
+                                }
+                            }
+                            self.pending_due_date = None;
                         }
                     }
                     _ => {}
@@ -515,6 +540,15 @@ impl App {
             }
             Action::CancelEdit => {
                 self.input.clear();
+                if let Mode::Editing { edit_id: None } = &self.mode {
+                    if let Some(ref cat) = self.category_filter {
+                        if !self.data.categories().contains(cat) {
+                            self.category_filter = None;
+                            self.category_index = 0;
+                        }
+                    }
+                    self.pending_due_date = None;
+                }
                 self.mode = Mode::Normal;
             }
             Action::ToggleDone(id) => {
@@ -530,12 +564,17 @@ impl App {
                     self.mode = Mode::ConfirmDelete {
                         ids: vec![id],
                         texts: vec![item.text.clone()],
+                        category_name: None,
                     };
                 }
             }
             Action::CyclePriority(id, forward) => {
                 self.data.cycle_priority(id, forward);
                 self.mark_dirty();
+                let new_idx = self.items().iter().position(|i| i.id == id);
+                if let Some(pos) = new_idx {
+                    self.selected_index = pos;
+                }
             }
             Action::Reorder(id, direction) => {
                 if self.data.reorder(id, direction) {
@@ -699,13 +738,22 @@ impl App {
             }
             Action::ConfirmDeleteYes => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
-                if let Mode::ConfirmDelete { ids, .. } = mode {
+                if let Mode::ConfirmDelete { ids, category_name, .. } = mode {
                     for id in ids {
                         if let Some(item) = self.data.delete(id) {
                             self.clip.cut(item);
                         }
                     }
+                    if let Some(name) = category_name {
+                        self.data.remove_category(&name);
+                    }
                     self.mark_dirty();
+                }
+                if let Some(ref cat) = self.category_filter {
+                    if !self.data.categories().contains(cat) {
+                        self.category_filter = None;
+                        self.category_index = 0;
+                    }
                 }
                 self.clamp_selection();
             }
@@ -750,45 +798,44 @@ impl App {
             Action::TogglePin(id) => {
                 self.data.toggle_pin(id);
                 self.mark_dirty();
+                let new_idx = self.items().iter().position(|i| i.id == id);
+                if let Some(pos) = new_idx {
+                    self.selected_index = pos;
+                }
             }
             Action::SetDueDate => {
-                if let Mode::Editing { edit_id: Some(id) } = &self.mode {
-                    if let Some(item) = self.data.get(*id) {
-                        let new_date = if item.due_date.is_some() {
-                            None
-                        } else {
-                            let secs = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
-                            let mut days = secs / 86400;
-                            let mut y = 1970u64;
-                            loop {
-                                let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-                                let yd = if leap { 366 } else { 365 };
-                                if days < yd { break; }
-                                days -= yd;
-                                y += 1;
-                            }
-                            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-                            let month_days: [u64; 12] = if leap {
-                                [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                            } else {
-                                [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                            };
-                            let mut m = 1u64;
-                            for &md in &month_days {
-                                if days < md { break; }
-                                days -= md;
-                                m += 1;
-                            }
-                            let d = days + 1;
-                            Some(format!("{:04}-{:02}-{:02}", y, m, d))
-                        };
-                        self.data.set_due_date(*id, new_date);
+                let edit_id = match &self.mode {
+                    Mode::Editing { edit_id } => *edit_id,
+                    _ => return false,
+                };
+                self.input.clear();
+                self.mode = Mode::DueDateInput { edit_id };
+            }
+            Action::SubmitDueDate => {
+                let text = self.input.text().to_string();
+                let text = text.trim().to_string();
+                let edit_id = match &self.mode {
+                    Mode::DueDateInput { edit_id } => *edit_id,
+                    _ => None,
+                };
+                if !text.is_empty() {
+                    if let Some(id) = edit_id {
+                        self.data.set_due_date(id, Some(text));
                         self.mark_dirty();
+                    } else {
+                        self.pending_due_date = Some(text);
                     }
                 }
+                self.input.clear();
+                self.mode = Mode::Editing { edit_id };
+            }
+            Action::CancelDueDate => {
+                let edit_id = match &self.mode {
+                    Mode::DueDateInput { edit_id } => *edit_id,
+                    _ => None,
+                };
+                self.input.clear();
+                self.mode = Mode::Editing { edit_id };
             }
             Action::SwitchPane => {
                 self.pane = match self.pane {
@@ -826,13 +873,13 @@ impl App {
             }
             Action::AddCategory(name) => {
                 if !name.is_empty() {
-                    self.category_filter = Some(name.clone());
+                    self.data.add_category(&name);
+                    self.mark_dirty();
                     let cats = self.data.categories();
                     if let Some(pos) = cats.iter().position(|c| c == &name) {
                         self.category_index = pos + 1;
-                    } else {
-                        self.category_index = cats.len() + 1;
                     }
+                    self.category_filter = Some(name);
                     self.pane = Pane::Categories;
                     self.clamp_selection();
                 }
@@ -840,12 +887,15 @@ impl App {
                 self.mode = Mode::Normal;
             }
             Action::DeleteCategory(name) => {
-                self.data.delete_category(&name);
-                self.category_filter = None;
-                self.category_index = 0;
-                self.mark_dirty();
-                self.mode = Mode::Normal;
-                self.clamp_selection();
+                let ids: Vec<u64> = self.data.items().iter()
+                    .filter(|i| i.category.as_deref() == Some(&name))
+                    .map(|i| i.id)
+                    .collect();
+                let texts: Vec<String> = self.data.items().iter()
+                    .filter(|i| i.category.as_deref() == Some(&name))
+                    .map(|i| i.text.clone())
+                    .collect();
+                self.mode = Mode::ConfirmDelete { ids, texts, category_name: Some(name) };
             }
             Action::CancelCategoryPicker => {
                 self.mode = Mode::Normal;
@@ -860,6 +910,15 @@ impl App {
                 if let Some(id) = id {
                     self.data.set_category(id, Some(name.clone()));
                     self.mark_dirty();
+                }
+                if !name.is_empty() {
+                    self.category_filter = Some(name.clone());
+                    let cats = self.data.categories();
+                    if let Some(pos) = cats.iter().position(|c| c == &name) {
+                        self.category_index = pos + 1;
+                    } else {
+                        self.category_index = cats.len() + 1;
+                    }
                 }
                 self.input.clear();
                 self.mode = Mode::Normal;
