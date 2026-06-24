@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
@@ -11,6 +12,19 @@ use crate::data::{TodoData, TodoItem, Priority};
 use crate::keys;
 use crate::ui::input::InputBuffer;
 use crate::ui::theme::Theme;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    Default,
+    Priority,
+    DueDate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Items,
+    Categories,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiSelectCmd {
@@ -29,6 +43,9 @@ pub enum Mode {
     Help,
     Keybindings,
     ConfirmDelete { ids: Vec<u64>, texts: Vec<String> },
+    CategoryPicker { selected: usize },
+    CategoryAdd,
+    SortPicker { selected: usize },
 }
 
 pub enum Action {
@@ -60,6 +77,22 @@ pub enum Action {
     CancelPriorityPicker,
     Copy,
     Paste,
+    UndoDelete,
+    TogglePin(u64),
+    SetDueDate,
+    SwitchPane,
+    OpenCategoryPicker,
+    CategorySelect(usize),
+    AddCategory(String),
+    CreateAndAssignCategory(String),
+    DeleteCategory(String),
+    CancelCategoryPicker,
+    StartCategoryAdd,
+    StartCategoryAddWithChar(char),
+    CancelCategoryAdd,
+    StartSortPicker,
+    SortSelect(usize),
+    CancelSortPicker,
     Quit,
 }
 
@@ -71,9 +104,15 @@ pub struct App {
     pub clip: Clipboard,
     pub filter: String,
     pub priority_filter: Option<Priority>,
+    pub category_filter: Option<String>,
+    pub pane: Pane,
+    pub category_index: usize,
+    pub sort_mode: SortMode,
     pub theme: Theme,
     pub completions: Vec<String>,
     pub completion_index: usize,
+    pub dirty: bool,
+    pub last_mutated: Instant,
 }
 
 impl App {
@@ -88,10 +127,31 @@ impl App {
             clip: Clipboard::new(),
             filter: String::new(),
             priority_filter: None,
+            category_filter: None,
+            pane: Pane::Items,
+            category_index: 0,
+            sort_mode: SortMode::Default,
             theme,
             completions: Vec::new(),
             completion_index: 0,
+            dirty: false,
+            last_mutated: Instant::now(),
         }
+    }
+
+    fn mark_dirty(&mut self) {
+        if !self.dirty {
+            self.dirty = true;
+            self.last_mutated = Instant::now();
+        }
+    }
+
+    fn active_category(&self) -> Option<String> {
+        let cats = self.data.categories();
+        if self.category_index == 0 || self.category_index > cats.len() {
+            return None;
+        }
+        cats.get(self.category_index - 1).cloned()
     }
 
     pub fn items(&self) -> Vec<TodoItem> {
@@ -100,7 +160,11 @@ impl App {
             Some(p) => items.into_iter().filter(|i| i.priority == p).collect(),
             None => items,
         };
-        if self.filter.is_empty() {
+        let items: Vec<TodoItem> = match self.active_category() {
+            Some(cat) => items.into_iter().filter(|i| i.category.as_deref() == Some(cat.as_str())).collect(),
+            None => items,
+        };
+        let mut items: Vec<TodoItem> = if self.filter.is_empty() {
             items
         } else {
             let q = self.filter.to_lowercase();
@@ -108,7 +172,22 @@ impl App {
                 .into_iter()
                 .filter(|i| i.text.to_lowercase().contains(&q))
                 .collect()
+        };
+        match self.sort_mode {
+            SortMode::Default => {
+                items.sort_by_key(|i| !i.pinned);
+            }
+            SortMode::Priority => {
+                items.sort_by_key(|i| (!i.pinned, std::cmp::Reverse(i.priority as u8)));
+            }
+            SortMode::DueDate => {
+                items.sort_by_key(|i| {
+                    let due = i.due_date.as_deref().unwrap_or("9999-99-99").to_string();
+                    (!i.pinned, due)
+                });
+            }
         }
+        items
     }
 
     pub fn selected_index(&self) -> usize {
@@ -141,9 +220,36 @@ impl App {
                     &app.mode,
                     app.pending_count(),
                     &app.filter,
+                    &app.priority_filter,
+                    &app.pane,
+                    app.category_index,
+                    &app.data.categories(),
                     &app.theme,
+                    &app.sort_mode,
                 )
             })?;
+
+            let debounce = Duration::from_secs(2);
+            let timeout = if app.dirty {
+                let elapsed = app.last_mutated.elapsed();
+                if elapsed >= debounce {
+                    app.data.save();
+                    app.dirty = false;
+                    Duration::from_millis(500)
+                } else {
+                    debounce - elapsed
+                }
+            } else {
+                Duration::from_millis(500)
+            };
+
+            if !crossterm::event::poll(timeout)? {
+                if app.dirty {
+                    app.data.save();
+                    app.dirty = false;
+                }
+                continue;
+            }
 
             let event = crossterm::event::read()?;
             let action = match event {
@@ -152,8 +258,10 @@ impl App {
             };
 
             if let Some(action) = action {
-                let should_quit = app.handle_action(action);
-                if should_quit {
+                if app.handle_action(action) {
+                    if app.dirty {
+                        app.data.save();
+                    }
                     break;
                 }
             }
@@ -163,15 +271,30 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if key.code == KeyCode::Char('/') && !matches!(self.mode, Mode::Command { .. }) {
+        if key.code == KeyCode::Char('/') && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd) {
             return Some(Action::StartCommand);
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
         }
+
+        let is_pane_mode = matches!(self.mode, Mode::Normal | Mode::MultiSelect { .. });
+        if is_pane_mode {
+            match key.code {
+                KeyCode::Left if self.pane == Pane::Items => return Some(Action::SwitchPane),
+                KeyCode::Right if self.pane == Pane::Categories => return Some(Action::SwitchPane),
+                _ => {}
+            }
+        }
+
         match &self.mode {
             Mode::Normal => {
-                keys::handle_normal(key, &self.data, self.selected_index)
+                if self.pane == Pane::Categories {
+                    keys::handle_sidebar(key, &self.data, self.category_index)
+                } else {
+                    let items = self.items();
+                    keys::handle_normal(key, &items, self.selected_index)
+                }
             }
             Mode::Editing { .. } => {
                 keys::handle_editing(key, &mut self.input)
@@ -197,7 +320,6 @@ impl App {
                 } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k'))
                     && !key.modifiers.is_empty()
                 {
-                    // just let fall through to handle_command (e.g. Alt+↑)
                     return action;
                 } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
                     return Some(Action::SelectPrev);
@@ -213,7 +335,8 @@ impl App {
                 action
             }
             Mode::MultiSelect { .. } => {
-                keys::handle_multiselect(key, &self.data, self.selected_index)
+                let items = self.items();
+                keys::handle_multiselect(key, &items, self.selected_index)
             }
             Mode::ThemePicker { selected } => {
                 let action = keys::handle_theme_picker(key);
@@ -226,6 +349,46 @@ impl App {
                 let action = keys::handle_priority_picker(key);
                 if action.is_none() && key.code == KeyCode::Enter {
                     return Some(Action::PrioritySelect(*selected));
+                }
+                action
+            }
+            Mode::CategoryPicker { selected } => {
+                let nav_action = keys::handle_category_picker(key);
+                if nav_action.is_some() {
+                    return nav_action;
+                }
+                match key.code {
+                    KeyCode::Enter => {
+                        let text = self.input.text().to_string();
+                        if text.is_empty() {
+                            return Some(Action::CategorySelect(*selected));
+                        } else {
+                            return Some(Action::CreateAndAssignCategory(text));
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.input.clear();
+                        return Some(Action::CancelCategoryPicker);
+                    }
+                    _ => {
+                        if let KeyCode::Char(c) = key.code {
+                            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                && !key.modifiers.contains(KeyModifiers::ALT)
+                            {
+                                self.input.insert_char(c);
+                            }
+                        }
+                        None
+                    }
+                }
+            }
+            Mode::CategoryAdd => {
+                keys::handle_category_add(key, &mut self.input)
+            }
+            Mode::SortPicker { selected } => {
+                let action = keys::handle_sort_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::SortSelect(*selected));
                 }
                 action
             }
@@ -252,6 +415,21 @@ impl App {
                     if *selected > 0 {
                         *selected -= 1;
                     }
+                } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if self.pane == Pane::Categories {
+                    if self.category_index > 0 {
+                        self.category_index -= 1;
+                        let cats = self.data.categories();
+                        self.category_filter = if self.category_index == 0 {
+                            None
+                        } else {
+                            cats.get(self.category_index - 1).cloned()
+                        };
+                        self.clamp_selection();
+                    }
                 } else if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
@@ -271,6 +449,18 @@ impl App {
                     let max = 4usize;
                     if *selected < max {
                         *selected += 1;
+                    }
+                } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
+                    let max = 2usize;
+                    if *selected < max {
+                        *selected += 1;
+                    }
+                } else if self.pane == Pane::Categories {
+                    let cats = self.data.categories();
+                    if self.category_index < cats.len() {
+                        self.category_index += 1;
+                        self.category_filter = cats.get(self.category_index - 1).cloned();
+                        self.clamp_selection();
                     }
                 } else {
                     let max = self.items().len().saturating_sub(1);
@@ -305,13 +495,16 @@ impl App {
                         if !text.is_empty() && text.len() <= 500 {
                             match edit_id {
                                 None => {
-                                    self.data.add(&text);
+                                    let id = self.data.add(&text);
+                                    if let Some(cat) = &self.category_filter {
+                                        self.data.set_category(id, Some(cat.clone()));
+                                    }
                                 }
                                 Some(id) => {
                                     self.data.update_text(*id, &text);
                                 }
                             }
-                            self.data.save();
+                            self.mark_dirty();
                         }
                     }
                     _ => {}
@@ -326,11 +519,11 @@ impl App {
             }
             Action::ToggleDone(id) => {
                 self.data.toggle_done(id);
-                self.data.save();
+                self.mark_dirty();
             }
             Action::ToggleDoing(id) => {
                 self.data.toggle_doing(id);
-                self.data.save();
+                self.mark_dirty();
             }
             Action::DeleteItem(id) => {
                 if let Some(item) = self.data.get(id) {
@@ -342,7 +535,7 @@ impl App {
             }
             Action::CyclePriority(id, forward) => {
                 self.data.cycle_priority(id, forward);
-                self.data.save();
+                self.mark_dirty();
             }
             Action::Reorder(id, direction) => {
                 if self.data.reorder(id, direction) {
@@ -351,7 +544,7 @@ impl App {
                     } else if direction > 0 && self.selected_index < self.items().len().saturating_sub(1) {
                         self.selected_index += 1;
                     }
-                    self.data.save();
+                    self.mark_dirty();
                 }
                 self.clamp_selection();
             }
@@ -413,7 +606,7 @@ impl App {
                     }
                     "clear" | "c" => {
                         self.data.clear_done();
-                        self.data.save();
+                        self.mark_dirty();
                         self.mode = Mode::Normal;
                     }
                     "themes" => {
@@ -427,6 +620,28 @@ impl App {
                     }
                     "keybindings" | "k" => {
                         self.mode = Mode::Keybindings;
+                    }
+                    "categories" | "cat" => {
+                        self.mode = Mode::CategoryPicker { selected: 0 };
+                    }
+                    "sort" => {
+                        match arg.as_deref() {
+                            Some("priority") => {
+                                self.sort_mode = SortMode::Priority;
+                                self.mode = Mode::Normal;
+                            }
+                            Some("due") => {
+                                self.sort_mode = SortMode::DueDate;
+                                self.mode = Mode::Normal;
+                            }
+                            Some("default") => {
+                                self.sort_mode = SortMode::Default;
+                                self.mode = Mode::Normal;
+                            }
+                            _ => {
+                                self.mode = Mode::SortPicker { selected: 0 };
+                            }
+                        }
                     }
                     _ => {
                         self.mode = Mode::Normal;
@@ -454,13 +669,13 @@ impl App {
                                     self.clip.cut(item);
                                 }
                             }
-                            self.data.save();
+                            self.mark_dirty();
                         }
                         MultiSelectCmd::ToggleDone => {
                             for id in &selected {
                                 self.data.toggle_done(*id);
                             }
-                            self.data.save();
+                            self.mark_dirty();
                         }
                     }
                     self.clamp_selection();
@@ -490,7 +705,7 @@ impl App {
                             self.clip.cut(item);
                         }
                     }
-                    self.data.save();
+                    self.mark_dirty();
                 }
                 self.clamp_selection();
             }
@@ -526,6 +741,151 @@ impl App {
                     }
                 }
             }
+            Action::UndoDelete => {
+                if let Some(item) = self.clip.paste() {
+                    self.data.restore(item);
+                    self.mark_dirty();
+                }
+            }
+            Action::TogglePin(id) => {
+                self.data.toggle_pin(id);
+                self.mark_dirty();
+            }
+            Action::SetDueDate => {
+                if let Mode::Editing { edit_id: Some(id) } = &self.mode {
+                    if let Some(item) = self.data.get(*id) {
+                        let new_date = if item.due_date.is_some() {
+                            None
+                        } else {
+                            let secs = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let mut days = secs / 86400;
+                            let mut y = 1970u64;
+                            loop {
+                                let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+                                let yd = if leap { 366 } else { 365 };
+                                if days < yd { break; }
+                                days -= yd;
+                                y += 1;
+                            }
+                            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+                            let month_days: [u64; 12] = if leap {
+                                [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+                            } else {
+                                [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+                            };
+                            let mut m = 1u64;
+                            for &md in &month_days {
+                                if days < md { break; }
+                                days -= md;
+                                m += 1;
+                            }
+                            let d = days + 1;
+                            Some(format!("{:04}-{:02}-{:02}", y, m, d))
+                        };
+                        self.data.set_due_date(*id, new_date);
+                        self.mark_dirty();
+                    }
+                }
+            }
+            Action::SwitchPane => {
+                self.pane = match self.pane {
+                    Pane::Items => Pane::Categories,
+                    Pane::Categories => Pane::Items,
+                };
+            }
+            Action::OpenCategoryPicker => {
+                self.mode = Mode::CategoryPicker { selected: 0 };
+            }
+            Action::CategorySelect(idx) => {
+                let cats = self.data.categories();
+                let opened_from_picker = matches!(self.mode, Mode::CategoryPicker { .. });
+                if opened_from_picker {
+                    let items = self.items();
+                    let id = items.get(self.selected_index()).map(|i| i.id);
+                    if let Some(id) = id {
+                        let category = if idx == 0 { None } else { cats.get(idx - 1).cloned() };
+                        self.data.set_category(id, category);
+                        self.mark_dirty();
+                    }
+                    self.mode = Mode::Normal;
+                } else {
+                    if idx == 0 {
+                        self.category_filter = None;
+                        self.category_index = 0;
+                    } else if let Some(cat) = cats.get(idx - 1) {
+                        self.category_filter = Some(cat.clone());
+                        self.category_index = idx;
+                    }
+                    self.pane = Pane::Items;
+                    self.mode = Mode::Normal;
+                    self.clamp_selection();
+                }
+            }
+            Action::AddCategory(name) => {
+                if !name.is_empty() {
+                    self.category_filter = Some(name.clone());
+                    let cats = self.data.categories();
+                    if let Some(pos) = cats.iter().position(|c| c == &name) {
+                        self.category_index = pos + 1;
+                    } else {
+                        self.category_index = cats.len() + 1;
+                    }
+                    self.pane = Pane::Categories;
+                    self.clamp_selection();
+                }
+                self.input.clear();
+                self.mode = Mode::Normal;
+            }
+            Action::DeleteCategory(name) => {
+                self.data.delete_category(&name);
+                self.category_filter = None;
+                self.category_index = 0;
+                self.mark_dirty();
+                self.mode = Mode::Normal;
+                self.clamp_selection();
+            }
+            Action::CancelCategoryPicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::StartCategoryAdd => {
+                self.input.clear();
+                self.mode = Mode::CategoryAdd;
+            }
+            Action::CreateAndAssignCategory(name) => {
+                let items = self.items();
+                let id = items.get(self.selected_index()).map(|i| i.id);
+                if let Some(id) = id {
+                    self.data.set_category(id, Some(name.clone()));
+                    self.mark_dirty();
+                }
+                self.input.clear();
+                self.mode = Mode::Normal;
+            }
+            Action::StartSortPicker => {
+                self.mode = Mode::SortPicker { selected: 0 };
+            }
+            Action::SortSelect(idx) => {
+                const SORTS: [SortMode; 3] = [SortMode::Priority, SortMode::DueDate, SortMode::Default];
+                if let Some(&mode) = SORTS.get(idx) {
+                    self.sort_mode = mode;
+                }
+                self.mode = Mode::Normal;
+            }
+            Action::CancelSortPicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::StartCategoryAddWithChar(c) => {
+                self.input.clear();
+                self.input.insert_char(c);
+                self.mode = Mode::CategoryAdd;
+            }
+            Action::CancelCategoryAdd => {
+                self.input.clear();
+                self.mode = Mode::Normal;
+            }
             Action::Quit => return true,
         }
 
@@ -541,10 +901,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("d", "Alias for delete"),
     ("help", "Show help"),
     ("keybindings", "Show keybindings"),
+    ("categories", "Filter by category"),
+    ("cat", "Alias for categories"),
     ("priorities", "Filter by priority"),
     ("p", "Alias for priorities"),
     ("search", "Filter items by text"),
     ("s", "Alias for search"),
+    ("sort", "Sort items (priority/due/default)"),
     ("themes", "List available themes"),
     ("x", "Alias for done"),
 ];
@@ -560,7 +923,7 @@ pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> 
 pub fn get_command_list() -> Vec<(&'static str, &'static str)> {
     COMMANDS
         .iter()
-        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k"))
+        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k" | "cat"))
         .copied()
         .collect()
 }

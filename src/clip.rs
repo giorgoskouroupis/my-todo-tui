@@ -19,7 +19,6 @@ impl Clipboard {
         self.items.push(item);
     }
 
-    #[allow(dead_code)]
     pub fn paste(&mut self) -> Option<TodoItem> {
         self.items.pop()
     }

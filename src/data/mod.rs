@@ -43,6 +43,9 @@ pub struct TodoItem {
     pub doing: bool,
     pub priority: Priority,
     pub order: u64,
+    pub pinned: bool,
+    pub due_date: Option<String>,
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,9 +92,16 @@ impl TodoData {
             doing: false,
             priority: Priority::Normal,
             order,
+            pinned: false,
+            due_date: None,
+            category: None,
         });
 
         id
+    }
+
+    pub fn restore(&mut self, item: TodoItem) {
+        self.items.push(item);
     }
 
     pub fn update_text(&mut self, id: u64, text: &str) -> bool {
@@ -124,6 +134,37 @@ impl TodoData {
                 item.done = false;
             }
         }
+    }
+
+    pub fn toggle_pin(&mut self, id: u64) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.pinned = !item.pinned;
+        }
+    }
+
+    pub fn set_due_date(&mut self, id: u64, date: Option<String>) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.due_date = date;
+        }
+    }
+
+    pub fn set_category(&mut self, id: u64, category: Option<String>) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.category = category;
+        }
+    }
+
+    pub fn categories(&self) -> Vec<String> {
+        let mut cats: Vec<String> = self.items.iter()
+            .filter_map(|i| i.category.clone())
+            .collect();
+        cats.sort();
+        cats.dedup();
+        cats
+    }
+
+    pub fn delete_category(&mut self, name: &str) {
+        self.items.retain(|i| i.category.as_deref() != Some(name));
     }
 
     pub fn cycle_priority(&mut self, id: u64, forward: bool) {
