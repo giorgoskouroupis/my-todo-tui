@@ -146,6 +146,8 @@ fn render_header(frame: &mut Frame, area: Rect, pending_count: usize, filter: &s
 
 fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: usize, categories: &[String], theme: &Theme) {
     let is_active = *pane == Pane::Categories;
+    let content_width = area.width.saturating_sub(1).max(10) as usize;
+    let name_width = content_width.saturating_sub(4).max(4);
 
     let mut lines = Vec::new();
     let all_filtered = !is_active && category_index == 0;
@@ -154,7 +156,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: us
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                if category_index == 0 { "\u{25cf} " } else { "  " },
+                "  ",
                 Style::default().fg(theme.accent),
             ),
             Span::styled(
@@ -171,22 +173,26 @@ fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: us
         let idx = i + 1;
         let hl = is_active && category_index == idx;
         let is_filter = !is_active && category_index == idx;
-        lines.push(
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    if is_filter { "\u{25cf} " } else { "  " },
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(
-                    cat.clone(),
-                    Style::default()
-                        .fg(if is_filter { theme.text_primary } else { theme.text_primary })
-                        .add_modifier(if hl || is_filter { Modifier::BOLD } else { Modifier::empty() }),
-                ),
-            ])
-            .style(Style::default().bg(if hl || is_filter { theme.bg_tertiary } else { theme.bg_primary })),
-        );
+        let bg = if hl || is_filter { theme.bg_tertiary } else { theme.bg_primary };
+        let style = Style::default()
+            .fg(if is_filter { theme.text_primary } else { theme.text_primary })
+            .add_modifier(if hl || is_filter { Modifier::BOLD } else { Modifier::empty() })
+            .bg(bg);
+
+        let bullet = Span::styled("  ", Style::default().fg(theme.accent));
+
+        let wrapped = wrap_text(cat, name_width);
+        for (j, seg) in wrapped.iter().enumerate() {
+            let mut spans = vec![Span::raw(" ")];
+            if j == 0 {
+                spans.push(bullet.clone());
+                spans.push(Span::styled(seg.clone(), style));
+            } else {
+                spans.push(Span::raw("    "));
+                spans.push(Span::styled(seg.clone(), style));
+            }
+            lines.push(Line::from(spans).style(Style::default().bg(bg)));
+        }
     }
 
     let block = Block::default()
@@ -920,34 +926,28 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
         Mode::DueDateInput { .. } => {
             let text = input.text();
             let cursor = input.cursor();
+            let white = Style::default().fg(Color::White);
+            let accent = Style::default().fg(theme.accent);
+            let cursor_style = Style::default().fg(theme.accent);
             let spans = if text.is_empty() {
                 vec![
-                    Span::styled(
-                        "  Due date (YYYY-MM-DD, Esc to skip): ",
-                        Style::default().fg(theme.accent),
-                    ),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
+                    Span::styled("\u{2588}", cursor_style),
                 ]
             } else if cursor == 0 {
                 vec![
-                    Span::styled(
-                        "  Due date (YYYY-MM-DD, Esc to skip): ",
-                        Style::default().fg(theme.accent),
-                    ),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(text, Style::default().fg(theme.text_primary)),
+                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
+                    Span::styled("\u{2588}", cursor_style),
+                    Span::styled(text, white),
                 ]
             } else {
                 let before = &text[..cursor];
                 let after = &text[cursor..];
                 vec![
-                    Span::styled(
-                        "  Due date (YYYY-MM-DD, Esc to skip): ",
-                        Style::default().fg(theme.accent),
-                    ),
-                    Span::styled(before, Style::default().fg(theme.text_primary)),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(after, Style::default().fg(theme.text_primary)),
+                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
+                    Span::styled(before, white),
+                    Span::styled("\u{2588}", cursor_style),
+                    Span::styled(after, white),
                 ]
             };
             (Line::from(spans), None)

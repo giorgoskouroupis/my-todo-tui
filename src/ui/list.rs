@@ -124,7 +124,7 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
         line1.push(Span::raw(" \u{1F4CC}"));
     }
     if let Some(ref date) = item.due_date {
-        let date_color = if is_overdue_item { theme.error } else { theme.text_muted };
+        let date_color = if is_overdue_item { theme.error } else { theme.warning };
         line1.push(Span::raw(" \u{1F4C5} "));
         line1.push(Span::styled(date.clone(), Style::default().fg(date_color)));
     }
