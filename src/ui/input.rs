@@ -37,12 +37,6 @@ impl InputBuffer {
         self.selection = None;
     }
 
-    #[allow(dead_code)]
-    pub fn selection_range(&self) -> Option<(usize, usize)> {
-        self.selection
-    }
-
-    #[allow(dead_code)]
     pub fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection?;
         if start < end {
@@ -63,7 +57,6 @@ impl InputBuffer {
         self.cursor = self.clamp_cursor(self.cursor);
     }
 
-    #[allow(dead_code)]
     pub fn insert_str(&mut self, s: &str) {
         self.delete_selection();
         self.text.insert_str(self.cursor, s);

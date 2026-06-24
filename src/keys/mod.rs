@@ -273,8 +273,7 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
 pub fn handle_confirm_delete(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Enter | KeyCode::Char('Y') | KeyCode::Char('y') => Some(Action::ConfirmDeleteYes),
-        KeyCode::Char('N') | KeyCode::Char('n') => Some(Action::ConfirmDeleteNo),
-        _ => None,
+        _ => Some(Action::ConfirmDeleteNo),
     }
 }
 

@@ -177,12 +177,6 @@ impl TodoData {
         self.categories.retain(|c| c != name);
     }
 
-    #[allow(dead_code)]
-    pub fn delete_category(&mut self, name: &str) {
-        self.items.retain(|i| i.category.as_deref() != Some(name));
-        self.categories.retain(|c| c != name);
-    }
-
     pub fn cycle_priority(&mut self, id: u64, forward: bool) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             item.priority = if forward {

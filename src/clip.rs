@@ -14,22 +14,7 @@ impl Clipboard {
         self.items.push(item);
     }
 
-    #[allow(dead_code)]
-    pub fn copy(&mut self, item: TodoItem) {
-        self.items.push(item);
-    }
-
     pub fn paste(&mut self) -> Option<TodoItem> {
         self.items.pop()
-    }
-
-    #[allow(dead_code)]
-    pub fn has_items(&self) -> bool {
-        !self.items.is_empty()
-    }
-
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.items.clear();
     }
 }

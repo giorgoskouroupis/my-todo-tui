@@ -589,7 +589,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("←/→", "Switch pane", false),
         ("Ctrl+K", "Assign category", false),
         ("/", "Command mode", false),
-        ("q/Esc", "Quit", false),
+        ("Ctrl+C", "Quit (from any mode)", false),
         ("", "", false),
         ("Sidebar", "", true),
         ("j/k or ↑/↓", "Navigate", false),
@@ -923,7 +923,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             let spans = if text.is_empty() {
                 vec![
                     Span::styled(
-                        "  Due date (YYYY-MM-DD): ",
+                        "  Due date (YYYY-MM-DD, Esc to skip): ",
                         Style::default().fg(theme.accent),
                     ),
                     Span::styled("\u{2588}", Style::default().fg(theme.accent)),
@@ -931,7 +931,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             } else if cursor == 0 {
                 vec![
                     Span::styled(
-                        "  Due date (YYYY-MM-DD): ",
+                        "  Due date (YYYY-MM-DD, Esc to skip): ",
                         Style::default().fg(theme.accent),
                     ),
                     Span::styled("\u{2588}", Style::default().fg(theme.accent)),
@@ -942,7 +942,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
                 let after = &text[cursor..];
                 vec![
                     Span::styled(
-                        "  Due date (YYYY-MM-DD): ",
+                        "  Due date (YYYY-MM-DD, Esc to skip): ",
                         Style::default().fg(theme.accent),
                     ),
                     Span::styled(before, Style::default().fg(theme.text_primary)),
