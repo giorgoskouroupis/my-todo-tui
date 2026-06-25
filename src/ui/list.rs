@@ -15,6 +15,10 @@ fn priority_color(p: Priority, theme: &Theme) -> ratatui::style::Color {
     }
 }
 
+fn is_leap_year(year: u64) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
 fn today_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -23,16 +27,14 @@ fn today_iso() -> String {
     let mut days = secs / 86400;
     let mut y = 1970u64;
     loop {
-        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-        let yd = if leap { 366 } else { 365 };
+        let yd = if is_leap_year(y) { 366 } else { 365 };
         if days < yd {
             break;
         }
         days -= yd;
         y += 1;
     }
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let month_days: [u64; 12] = if leap {
+    let month_days: [u64; 12] = if is_leap_year(y) {
         [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
         [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -54,7 +56,12 @@ fn is_overdue(due_date: &str) -> bool {
     due_date.as_bytes() <= today.as_bytes() && due_date.len() == 10
 }
 
-fn highlight_matches<'a>(text: &str, filter: &str, base_style: Style, match_style: Style) -> Vec<Span<'a>> {
+fn highlight_matches<'a>(
+    text: &str,
+    filter: &str,
+    base_style: Style,
+    match_style: Style,
+) -> Vec<Span<'a>> {
     if filter.is_empty() {
         return vec![Span::styled(text.to_string(), base_style)];
     }
@@ -67,7 +74,10 @@ fn highlight_matches<'a>(text: &str, filter: &str, base_style: Style, match_styl
         if abs > start {
             spans.push(Span::styled(text[start..abs].to_string(), base_style));
         }
-        spans.push(Span::styled(text[abs..abs + q.len()].to_string(), match_style));
+        spans.push(Span::styled(
+            text[abs..abs + q.len()].to_string(),
+            match_style,
+        ));
         start = abs + q.len();
     }
     if start < text.len() {
@@ -76,7 +86,15 @@ fn highlight_matches<'a>(text: &str, filter: &str, base_style: Style, match_styl
     spans
 }
 
-pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme: &Theme, text_width: usize, filter: &str, hide_category_badge: bool) -> ListItem<'static> {
+pub fn render_item(
+    item: &TodoItem,
+    selected: bool,
+    multi_selected: bool,
+    theme: &Theme,
+    text_width: usize,
+    filter: &str,
+    hide_category_badge: bool,
+) -> ListItem<'static> {
     let base_bg = if selected {
         theme.bg_tertiary
     } else if multi_selected {
@@ -85,7 +103,7 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
         theme.bg_secondary
     };
 
-    let is_overdue_item = !item.done && item.due_date.as_deref().map_or(false, is_overdue);
+    let is_overdue_item = !item.done && item.due_date.as_deref().is_some_and(is_overdue);
 
     let title_style = if item.done {
         Style::default()
@@ -115,7 +133,11 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
         line1.push(Span::styled("\u{2713}", Style::default().fg(theme.success)));
     } else {
         let circle = if item.doing { "\u{25cf}" } else { "\u{25cb}" };
-        let circle_color = if item.doing { theme.accent } else { theme.text_primary };
+        let circle_color = if item.doing {
+            theme.accent
+        } else {
+            theme.text_primary
+        };
         line1.push(Span::styled(circle, Style::default().fg(circle_color)));
     }
     line1.push(Span::raw(" "));
@@ -124,7 +146,11 @@ pub fn render_item(item: &TodoItem, selected: bool, multi_selected: bool, theme:
         line1.push(Span::raw(" \u{1F4CC}"));
     }
     if let Some(ref date) = item.due_date {
-        let date_color = if is_overdue_item { theme.error } else { theme.warning };
+        let date_color = if is_overdue_item {
+            theme.error
+        } else {
+            theme.warning
+        };
         line1.push(Span::raw(" \u{1F4C5} "));
         line1.push(Span::styled(date.clone(), Style::default().fg(date_color)));
     }

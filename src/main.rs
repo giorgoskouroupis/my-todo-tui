@@ -7,14 +7,28 @@ mod ui;
 
 use std::io;
 
-use clap::Parser;
-
-#[derive(Parser)]
-#[command(name = "todo", version, about = "A terminal todo app")]
-struct Args {}
+fn parse_args() {
+    let mut args = std::env::args().skip(1);
+    if let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!("A terminal todo app\n\nUsage: todo");
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("todo {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            _ => {
+                eprintln!("error: unexpected argument '{arg}'\n\nUsage: todo");
+                std::process::exit(2);
+            }
+        }
+    }
+}
 
 fn main() -> io::Result<()> {
-    let _args = Args::parse();
+    parse_args();
 
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();

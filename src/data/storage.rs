@@ -5,9 +5,7 @@ use super::TodoData;
 fn data_path() -> PathBuf {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("."));
 
     base.join("todo-tui").join("todos.json")
@@ -21,8 +19,7 @@ impl Storage {
         let raw = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-        serde_json::from_str(&raw)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
     }
 
     pub fn save(data: &TodoData) -> Result<(), String> {

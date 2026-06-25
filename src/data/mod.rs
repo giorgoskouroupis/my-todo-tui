@@ -32,7 +32,6 @@ impl Priority {
             Self::Urgent => Self::High,
         }
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,11 +39,15 @@ pub struct TodoItem {
     pub id: u64,
     pub text: String,
     pub done: bool,
+    #[serde(default)]
     pub doing: bool,
     pub priority: Priority,
     pub order: u64,
+    #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
     pub due_date: Option<String>,
+    #[serde(default)]
     pub category: Option<String>,
 }
 
@@ -82,11 +85,7 @@ impl TodoData {
         let id = self.next_id;
         self.next_id += 1;
 
-        let order = self
-            .items
-            .last()
-            .map(|i| i.order + 1)
-            .unwrap_or(0);
+        let order = self.items.last().map(|i| i.order + 1).unwrap_or(0);
 
         self.items.push(TodoItem {
             id,
@@ -158,7 +157,9 @@ impl TodoData {
     }
 
     pub fn categories(&self) -> Vec<String> {
-        let mut cats: Vec<String> = self.items.iter()
+        let mut cats: Vec<String> = self
+            .items
+            .iter()
             .filter_map(|i| i.category.clone())
             .collect();
         cats.extend(self.categories.iter().cloned());

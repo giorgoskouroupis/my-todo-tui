@@ -11,21 +11,22 @@ use crate::data::{Priority, TodoItem};
 use self::input::InputBuffer;
 use self::theme::Theme;
 
-pub fn render(
-    frame: &mut Frame,
-    items: &[TodoItem],
-    selected_index: usize,
-    input: &InputBuffer,
-    mode: &Mode,
-    pending_count: usize,
-    filter: &str,
-    priority_filter: &Option<Priority>,
-    pane: &Pane,
-    category_index: usize,
-    categories: &[String],
-    theme: &Theme,
-    sort_mode: &SortMode,
-) {
+pub struct RenderState<'a> {
+    pub items: &'a [TodoItem],
+    pub selected_index: usize,
+    pub input: &'a InputBuffer,
+    pub mode: &'a Mode,
+    pub pending_count: usize,
+    pub filter: &'a str,
+    pub priority_filter: &'a Option<Priority>,
+    pub pane: &'a Pane,
+    pub category_index: usize,
+    pub categories: &'a [String],
+    pub theme: &'a Theme,
+    pub sort_mode: &'a SortMode,
+}
+
+pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     let area = frame.area();
     let layout = Layout::vertical([
         Constraint::Length(2),
@@ -34,89 +35,99 @@ pub fn render(
     ])
     .split(area);
 
-    render_header(frame, layout[0], pending_count, filter, priority_filter, selected_index, items.len(), categories, category_index, theme, sort_mode);
+    render_header(frame, layout[0], &state);
 
     let mid = layout[1];
-    let h_layout = Layout::horizontal([
-        Constraint::Length(22),
-        Constraint::Min(1),
-    ])
-    .split(mid);
+    let h_layout = Layout::horizontal([Constraint::Length(22), Constraint::Min(1)]).split(mid);
 
-    render_sidebar(frame, h_layout[0], pane, category_index, categories, theme);
-    render_list(frame, h_layout[1], items, selected_index, mode, filter, theme, pane, category_index);
-    render_input(frame, layout[2], input, mode, filter, theme);
+    render_sidebar(
+        frame,
+        h_layout[0],
+        state.pane,
+        state.category_index,
+        state.categories,
+        state.theme,
+    );
+    render_list(frame, h_layout[1], &state);
+    render_input(
+        frame,
+        layout[2],
+        state.input,
+        state.mode,
+        state.filter,
+        state.theme,
+    );
 
     let popup_area = mid;
-    if let Mode::Command { selected } = mode {
-        render_cmd_completions(frame, popup_area, input, *selected, theme);
-    } else if let Mode::ThemePicker { selected } = mode {
-        render_theme_picker(frame, popup_area, *selected, theme);
-    } else if let Mode::PriorityPicker { selected } = mode {
-        render_priority_picker(frame, popup_area, *selected, theme);
-    } else if let Mode::CategoryPicker { selected } = mode {
-        render_category_picker(frame, popup_area, *selected, categories, theme);
-    } else if let Mode::SortPicker { selected } = mode {
-        render_sort_picker(frame, popup_area, *selected, theme);
-    } else if let Mode::Help = mode {
-        render_help_popup(frame, popup_area, theme);
-    } else if let Mode::Keybindings = mode {
-        render_keybindings_popup(frame, popup_area, theme);
-    } else if let Mode::ConfirmDelete { texts, .. } = mode {
-        render_confirm_delete_popup(frame, popup_area, texts, theme);
+    if let Mode::Command { selected } = state.mode {
+        render_cmd_completions(frame, popup_area, state.input, *selected, state.theme);
+    } else if let Mode::ThemePicker { selected } = state.mode {
+        render_theme_picker(frame, popup_area, *selected, state.theme);
+    } else if let Mode::PriorityPicker { selected } = state.mode {
+        render_priority_picker(frame, popup_area, *selected, state.theme);
+    } else if let Mode::CategoryPicker { selected } = state.mode {
+        render_category_picker(frame, popup_area, *selected, state.categories, state.theme);
+    } else if let Mode::SortPicker { selected } = state.mode {
+        render_sort_picker(frame, popup_area, *selected, state.theme);
+    } else if let Mode::Help = state.mode {
+        render_help_popup(frame, popup_area, state.theme);
+    } else if let Mode::Keybindings = state.mode {
+        render_keybindings_popup(frame, popup_area, state.theme);
+    } else if let Mode::ConfirmDelete { texts, .. } = state.mode {
+        render_confirm_delete_popup(frame, popup_area, texts, state.theme);
     }
 }
 
-fn render_header(frame: &mut Frame, area: Rect, pending_count: usize, filter: &str, priority_filter: &Option<Priority>, selected: usize, total: usize, categories: &[String], category_index: usize, theme: &Theme, sort_mode: &SortMode) {
+fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
     let mut spans = vec![
         Span::raw(" "),
         Span::styled(
             "TODO",
             Style::default()
-                .fg(theme.accent)
+                .fg(state.theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
 
-    if !filter.is_empty() {
+    if !state.filter.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("[search: {}]", filter),
-            Style::default().fg(theme.warning),
+            format!("[search: {}]", state.filter),
+            Style::default().fg(state.theme.warning),
         ));
     }
 
-    if let Some(p) = priority_filter {
+    if let Some(p) = state.priority_filter {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("[filter: {:?}]", p).to_lowercase(),
-            Style::default().fg(theme.warning),
+            Style::default().fg(state.theme.warning),
         ));
     }
 
-    if category_index > 0 {
-        if let Some(cat) = categories.get(category_index - 1) {
+    if state.category_index > 0 {
+        if let Some(cat) = state.categories.get(state.category_index - 1) {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 format!("[cat: {}]", cat),
-                Style::default().fg(theme.warning),
+                Style::default().fg(state.theme.warning),
             ));
         }
     }
 
-    match sort_mode {
+    match state.sort_mode {
         SortMode::Priority => {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 "[sort: priority]",
-                Style::default().fg(theme.warning),
+                Style::default().fg(state.theme.warning),
             ));
         }
         SortMode::DueDate => {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 "[sort: due]",
-                Style::default().fg(theme.warning),
+                Style::default().fg(state.theme.warning),
             ));
         }
         _ => {}
@@ -124,27 +135,34 @@ fn render_header(frame: &mut Frame, area: Rect, pending_count: usize, filter: &s
 
     spans.push(Span::raw("  "));
     spans.push(Span::styled(
-        format!("{} pending", pending_count),
-        Style::default().fg(theme.text_secondary),
+        format!("{} pending", state.pending_count),
+        Style::default().fg(state.theme.text_secondary),
     ));
 
-    if total > 0 {
+    if !state.items.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("{}/{}", selected + 1, total),
-            Style::default().fg(theme.text_muted),
+            format!("{}/{}", state.selected_index + 1, state.items.len()),
+            Style::default().fg(state.theme.text_muted),
         ));
     }
 
     let line = Line::from(spans);
 
     let paragraph = Paragraph::new(line)
-        .style(Style::default().bg(theme.bg_primary))
+        .style(Style::default().bg(state.theme.bg_primary))
         .alignment(Alignment::Left);
     frame.render_widget(paragraph, area);
 }
 
-fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: usize, categories: &[String], theme: &Theme) {
+fn render_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    pane: &Pane,
+    category_index: usize,
+    categories: &[String],
+    theme: &Theme,
+) {
     let is_active = *pane == Pane::Categories;
     let content_width = area.width.saturating_sub(1).max(10) as usize;
     let name_width = content_width.saturating_sub(4).max(4);
@@ -155,28 +173,41 @@ fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: us
     lines.push(
         Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "  ",
-                Style::default().fg(theme.accent),
-            ),
+            Span::styled("  ", Style::default().fg(theme.accent)),
             Span::styled(
                 "All",
                 Style::default()
-                    .fg(if all_filtered { theme.text_primary } else { theme.text_primary })
-                    .add_modifier(if all_hl || all_filtered { Modifier::BOLD } else { Modifier::empty() }),
+                    .fg(theme.text_primary)
+                    .add_modifier(if all_hl || all_filtered {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
         ])
-        .style(Style::default().bg(if all_hl || all_filtered { theme.bg_tertiary } else { theme.bg_primary })),
+        .style(Style::default().bg(if all_hl || all_filtered {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        })),
     );
 
     for (i, cat) in categories.iter().enumerate() {
         let idx = i + 1;
         let hl = is_active && category_index == idx;
         let is_filter = !is_active && category_index == idx;
-        let bg = if hl || is_filter { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if hl || is_filter {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
         let style = Style::default()
-            .fg(if is_filter { theme.text_primary } else { theme.text_primary })
-            .add_modifier(if hl || is_filter { Modifier::BOLD } else { Modifier::empty() })
+            .fg(theme.text_primary)
+            .add_modifier(if hl || is_filter {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            })
             .bg(bg);
 
         let bullet = Span::styled("  ", Style::default().fg(theme.accent));
@@ -197,9 +228,17 @@ fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: us
 
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(if is_active { theme.accent } else { theme.border_default }))
+        .border_style(Style::default().fg(if is_active {
+            theme.accent
+        } else {
+            theme.border_default
+        }))
         .title(" Categories ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let list = List::new(lines)
@@ -209,45 +248,70 @@ fn render_sidebar(frame: &mut Frame, area: Rect, pane: &Pane, category_index: us
     frame.render_widget(list, area);
 }
 
-fn render_list(frame: &mut Frame, area: Rect, items: &[TodoItem], selected_index: usize, mode: &Mode, filter: &str, theme: &Theme, pane: &Pane, category_index: usize) {
-    let selected_ids = match mode {
+fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
+    let selected_ids = match state.mode {
         Mode::MultiSelect { ref selected, .. } => Some(selected),
         _ => None,
     };
 
-    let is_active = *pane == Pane::Items;
+    let is_active = *state.pane == Pane::Items;
     let text_width = area.width.saturating_sub(7) as usize;
-    let hide_category_badge = category_index > 0;
+    let hide_category_badge = state.category_index > 0;
 
-    let list_items: Vec<_> = items
+    let list_items: Vec<_> = state
+        .items
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let multi_sel = selected_ids.map_or(false, |ids| ids.contains(&item.id));
-            self::list::render_item(item, is_active && i == selected_index, multi_sel, theme, text_width, filter, hide_category_badge)
+            let multi_sel = selected_ids.is_some_and(|ids| ids.contains(&item.id));
+            self::list::render_item(
+                item,
+                is_active && i == state.selected_index,
+                multi_sel,
+                state.theme,
+                text_width,
+                state.filter,
+                hide_category_badge,
+            )
         })
         .collect();
 
-    let mut list_state = ListState::default().with_selected(if is_active { Some(selected_index) } else { None });
+    let mut list_state = ListState::default().with_selected(if is_active {
+        Some(state.selected_index)
+    } else {
+        None
+    });
 
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(if is_active { theme.accent } else { theme.border_default }))
+        .border_style(Style::default().fg(if is_active {
+            state.theme.accent
+        } else {
+            state.theme.border_default
+        }))
         .title(" Items ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.bg_primary));
+        .title_style(
+            Style::default()
+                .fg(state.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(state.theme.bg_primary));
 
     let list = List::new(list_items)
         .block(block)
-        .style(Style::default().bg(theme.bg_primary))
-        .highlight_style(
-            Style::default().bg(theme.bg_tertiary),
-        );
+        .style(Style::default().bg(state.theme.bg_primary))
+        .highlight_style(Style::default().bg(state.theme.bg_tertiary));
 
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, selected: usize, theme: &Theme) {
+fn render_cmd_completions(
+    frame: &mut Frame,
+    area: Rect,
+    input: &InputBuffer,
+    selected: usize,
+    theme: &Theme,
+) {
     let prefix = input.text().to_lowercase();
     let matches: Vec<(&str, &str)> = get_filtered_commands(&prefix);
 
@@ -272,7 +336,11 @@ fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, se
     let mut lines = Vec::new();
     for (i, (cmd, desc)) in matches.iter().enumerate() {
         let highlighted = i == safe_selected;
-        let bg = if highlighted { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
 
         lines.push(
             Line::from(vec![
@@ -280,12 +348,13 @@ fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, se
                     format!("  /{:<1$}", cmd, cmd_width),
                     Style::default()
                         .fg(theme.accent)
-                        .add_modifier(if highlighted { Modifier::BOLD } else { Modifier::empty() }),
+                        .add_modifier(if highlighted {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
-                Span::styled(
-                    desc.to_string(),
-                    Style::default().fg(theme.text_secondary),
-                ),
+                Span::styled(desc.to_string(), Style::default().fg(theme.text_secondary)),
             ])
             .style(Style::default().bg(bg)),
         );
@@ -295,7 +364,11 @@ fn render_cmd_completions(frame: &mut Frame, area: Rect, input: &InputBuffer, se
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
         .title(" Commands ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let paragraph = Paragraph::new(lines)
@@ -324,7 +397,11 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
     for (i, name) in names.iter().enumerate() {
         let is_active = *name == theme.name;
         let is_highlighted = i == selected;
-        let bg = if is_highlighted { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if is_highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
 
         lines.push(
             Line::from(vec![
@@ -336,8 +413,16 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
                 Span::styled(
                     name.to_string(),
                     Style::default()
-                        .fg(if is_active { theme.accent } else { theme.text_primary })
-                        .add_modifier(if is_highlighted || is_active { Modifier::BOLD } else { Modifier::empty() }),
+                        .fg(if is_active {
+                            theme.accent
+                        } else {
+                            theme.text_primary
+                        })
+                        .add_modifier(if is_highlighted || is_active {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 Span::raw("  "),
             ])
@@ -349,7 +434,11 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
         .title(" Themes (Enter to select) ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let paragraph = Paragraph::new(lines)
@@ -383,7 +472,11 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
     let mut lines = Vec::new();
     for (i, (label, _)) in items.iter().enumerate() {
         let is_highlighted = i == selected;
-        let bg = if is_highlighted { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if is_highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
 
         lines.push(
             Line::from(vec![
@@ -392,7 +485,11 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
                     label.to_string(),
                     Style::default()
                         .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted { Modifier::BOLD } else { Modifier::empty() }),
+                        .add_modifier(if is_highlighted {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 Span::raw("  "),
             ])
@@ -404,7 +501,11 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
         .title(" Priorities ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let paragraph = Paragraph::new(lines)
@@ -415,7 +516,13 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
     frame.render_widget(paragraph, popup_area);
 }
 
-fn render_category_picker(frame: &mut Frame, area: Rect, selected: usize, categories: &[String], theme: &Theme) {
+fn render_category_picker(
+    frame: &mut Frame,
+    area: Rect,
+    selected: usize,
+    categories: &[String],
+    theme: &Theme,
+) {
     let total = categories.len() + 1;
     let height = total as u16 + 2;
     let width = 30;
@@ -431,9 +538,18 @@ fn render_category_picker(frame: &mut Frame, area: Rect, selected: usize, catego
 
     let mut lines = Vec::new();
     let entries: [&str; 1] = ["None"];
-    for (i, label) in entries.iter().copied().chain(categories.iter().map(|s| s.as_str())).enumerate() {
+    for (i, label) in entries
+        .iter()
+        .copied()
+        .chain(categories.iter().map(|s| s.as_str()))
+        .enumerate()
+    {
         let is_highlighted = i == selected;
-        let bg = if is_highlighted { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if is_highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
 
         lines.push(
             Line::from(vec![
@@ -441,8 +557,16 @@ fn render_category_picker(frame: &mut Frame, area: Rect, selected: usize, catego
                 Span::styled(
                     label.to_string(),
                     Style::default()
-                        .fg(if i == 0 { theme.text_muted } else { theme.text_primary })
-                        .add_modifier(if is_highlighted { Modifier::BOLD } else { Modifier::empty() }),
+                        .fg(if i == 0 {
+                            theme.text_muted
+                        } else {
+                            theme.text_primary
+                        })
+                        .add_modifier(if is_highlighted {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 Span::raw("  "),
             ])
@@ -454,7 +578,11 @@ fn render_category_picker(frame: &mut Frame, area: Rect, selected: usize, catego
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
         .title(" Assign Category ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let paragraph = Paragraph::new(lines)
@@ -486,7 +614,11 @@ fn render_sort_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Th
     let mut lines = Vec::new();
     for (i, (label, _)) in items.iter().enumerate() {
         let is_highlighted = i == selected;
-        let bg = if is_highlighted { theme.bg_tertiary } else { theme.bg_primary };
+        let bg = if is_highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
 
         lines.push(
             Line::from(vec![
@@ -495,7 +627,11 @@ fn render_sort_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Th
                     label.to_string(),
                     Style::default()
                         .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted { Modifier::BOLD } else { Modifier::empty() }),
+                        .add_modifier(if is_highlighted {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 Span::raw("  "),
             ])
@@ -507,7 +643,11 @@ fn render_sort_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Th
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
         .title(" Sort (p/d/n) ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_primary));
 
     let paragraph = Paragraph::new(lines)
@@ -523,12 +663,16 @@ fn help_file_paths() -> (String, String) {
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("todo-tui").join("config.json");
+        .join("todo-tui")
+        .join("config.json");
     let data = std::env::var_os("XDG_STATE_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        })
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("todo-tui").join("todos.json");
+        .join("todo-tui")
+        .join("todos.json");
     (config.display().to_string(), data.display().to_string())
 }
 
@@ -537,24 +681,84 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
     let lines = vec![
         Line::from(vec![
             Span::styled("  Welcome to ", Style::default().fg(theme.text_primary)),
-            Span::styled("todo-tui", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-        ]).style(Style::default().bg(theme.bg_secondary)),
+            Span::styled(
+                "todo-tui",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+        .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /command or /<alias> — run a command", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /help           — this screen", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /keybindings    — show all keybindings", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /priorities     — filter by priority", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /search <q>     — filter items by text", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /delete         — bulk delete (multi-select)", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /done           — bulk toggle done", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /clear          — clear completed items", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  /themes         — pick a theme", Style::default().fg(theme.text_primary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /command or /<alias> — run a command",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /help           — this screen",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /keybindings    — show all keybindings",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /priorities     — filter by priority",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /search <q>     — filter items by text",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /delete         — bulk delete (multi-select)",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /done           — bulk toggle done",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /clear          — clear completed items",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /themes         — pick a theme",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  Tab autocompletes commands, Esc cancels", Style::default().fg(theme.text_muted))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  Tab autocompletes commands, Esc cancels",
+            Style::default().fg(theme.text_muted),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled("  Files:", Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(format!("  Config: {}", config_path), Style::default().fg(theme.text_secondary))).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(format!("  Data:   {}", data_path), Style::default().fg(theme.text_secondary))).style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  Files:",
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            format!("  Config: {}", config_path),
+            Style::default().fg(theme.text_secondary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            format!("  Data:   {}", data_path),
+            Style::default().fg(theme.text_secondary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
     ];
 
     let width = 64;
@@ -568,7 +772,11 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(" Help ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_secondary));
 
     let paragraph = Paragraph::new(lines)
@@ -622,7 +830,9 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
                     Span::raw("  "),
                     Span::styled(
                         key.to_string(),
-                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ])
                 .style(Style::default().bg(theme.bg_secondary)),
@@ -655,7 +865,11 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(" Keybindings ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_secondary));
 
     let paragraph = Paragraph::new(lines)
@@ -667,16 +881,22 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], theme: &Theme) {
-    let max_content_w = (area.width.saturating_sub(6)).min(60).max(20) as usize;
+    let max_content_w = area.width.saturating_sub(6).clamp(20, 60) as usize;
 
     let mut lines_text: Vec<String> = Vec::new();
     if texts.len() == 1 {
         lines_text.push("Are you sure you want to delete?".into());
-        for wrapped in wrap_text(&format!("\"{}\"", &texts[0]), max_content_w.saturating_sub(2)) {
+        for wrapped in wrap_text(
+            &format!("\"{}\"", &texts[0]),
+            max_content_w.saturating_sub(2),
+        ) {
             lines_text.push(format!("  {wrapped}"));
         }
     } else {
-        lines_text.push(format!("Are you sure you want to delete these {} items?", texts.len()));
+        lines_text.push(format!(
+            "Are you sure you want to delete these {} items?",
+            texts.len()
+        ));
         for t in texts {
             for wrapped in wrap_text(&format!("\"{t}\""), max_content_w.saturating_sub(2)) {
                 lines_text.push(format!("  {wrapped}"));
@@ -699,20 +919,14 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
     // Y/n prompt
     lines.push(
         Line::from(vec![
-            Span::styled(
-                "(",
-                Style::default().fg(theme.text_muted),
-            ),
+            Span::styled("(", Style::default().fg(theme.text_muted)),
             Span::styled(
                 "Y",
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                "/n)",
-                Style::default().fg(theme.text_muted),
-            ),
+            Span::styled("/n)", Style::default().fg(theme.text_muted)),
         ])
         .style(Style::default().bg(theme.bg_secondary)),
     );
@@ -735,7 +949,11 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(" Confirm Delete ")
-        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(theme.bg_secondary));
 
     let paragraph = Paragraph::new(lines)
@@ -774,7 +992,14 @@ pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
     result
 }
 
-fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode, filter: &str, theme: &Theme) {
+fn render_input(
+    frame: &mut Frame,
+    area: Rect,
+    input: &InputBuffer,
+    mode: &Mode,
+    filter: &str,
+    theme: &Theme,
+) {
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.border_default));
@@ -782,109 +1007,74 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
     let (display_text, cursor_pos) = match mode {
         Mode::Searching => {
             let line = Line::from(vec![
-                Span::styled(
-                    "  Search: ",
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(
-                    filter,
-                    Style::default().fg(theme.text_primary),
-                ),
-                Span::styled(
-                    "\u{2588}",
-                    Style::default().fg(theme.accent),
-                ),
+                Span::styled("  Search: ", Style::default().fg(theme.accent)),
+                Span::styled(filter, Style::default().fg(theme.text_primary)),
+                Span::styled("\u{2588}", Style::default().fg(theme.accent)),
             ]);
             (line, None::<u16>)
         }
         Mode::Command { .. } => {
-            let mut spans = vec![
-                Span::styled(
-                    "  /",
-                    Style::default().fg(theme.accent),
-                ),
-            ];
+            let mut spans = vec![Span::styled("  /", Style::default().fg(theme.accent))];
 
             let text = input.text();
             if text.is_empty() {
-                spans.push(Span::styled(
-                    "\u{2588}",
-                    Style::default().fg(theme.accent),
-                ));
+                spans.push(Span::styled("\u{2588}", Style::default().fg(theme.accent)));
             } else {
                 spans.push(Span::styled(
                     text.to_string(),
                     Style::default().fg(theme.text_primary),
                 ));
-                spans.push(Span::styled(
-                    "\u{2588}",
-                    Style::default().fg(theme.accent),
-                ));
+                spans.push(Span::styled("\u{2588}", Style::default().fg(theme.accent)));
             }
 
             (Line::from(spans), None)
         }
         Mode::MultiSelect { .. } => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  [select items, Enter to confirm, Esc to cancel]",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  [select items, Enter to confirm, Esc to cancel]",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::ThemePicker { .. } => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  [up/down: navigate, Enter: select theme, Esc: cancel]",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  [up/down: navigate, Enter: select theme, Esc: cancel]",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::ConfirmDelete { .. } => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  Y/Enter to confirm, any other key to cancel",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  Y/Enter to confirm, any other key to cancel",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::PriorityPicker { .. } => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  [up/down: navigate, Enter: select priority, Esc: cancel]",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  [up/down: navigate, Enter: select priority, Esc: cancel]",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::Help => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  Esc to close help",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  Esc to close help",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::Keybindings => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  Esc to close keybindings",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  Esc to close keybindings",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::CategoryAdd => {
             let text = input.text();
             let line = Line::from(vec![
-                Span::styled(
-                    "  Category: ",
-                    Style::default().fg(theme.accent),
-                ),
+                Span::styled("  Category: ", Style::default().fg(theme.accent)),
                 Span::styled(
                     if text.is_empty() { "\u{2588}" } else { text },
                     Style::default().fg(theme.text_primary),
@@ -899,10 +1089,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
         Mode::CategoryPicker { .. } => {
             let text = input.text();
             let line = Line::from(vec![
-                Span::styled(
-                    "  Assign category: ",
-                    Style::default().fg(theme.accent),
-                ),
+                Span::styled("  Assign category: ", Style::default().fg(theme.accent)),
                 Span::styled(
                     if text.is_empty() { "\u{2588}" } else { text },
                     Style::default().fg(theme.text_primary),
@@ -915,12 +1102,10 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             (line, None)
         }
         Mode::SortPicker { .. } => {
-            let line = Line::from(vec![
-                Span::styled(
-                    "  [p: priority, d: due date, n: none, Enter: select, Esc: cancel]",
-                    Style::default().fg(theme.warning),
-                ),
-            ]);
+            let line = Line::from(vec![Span::styled(
+                "  [p: priority, d: due date, n: none, Enter: select, Esc: cancel]",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         Mode::DueDateInput { .. } => {
@@ -974,12 +1159,10 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             (Line::from(spans), None)
         }
         _ if input.is_empty() && matches!(mode, Mode::Normal) => {
-            let placeholder = Line::from(vec![
-                Span::styled(
-                    "  Type to add or / for commands",
-                    Style::default().fg(theme.text_placeholder),
-                ),
-            ]);
+            let placeholder = Line::from(vec![Span::styled(
+                "  Type to add or / for commands",
+                Style::default().fg(theme.text_placeholder),
+            )]);
             (placeholder, None)
         }
         _ => {
@@ -989,14 +1172,8 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
             if cursor == 0 {
                 let line = Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(
-                        "\u{2588}",
-                        Style::default().fg(theme.accent),
-                    ),
-                    Span::styled(
-                        text,
-                        Style::default().fg(theme.text_primary),
-                    ),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
+                    Span::styled(text, Style::default().fg(theme.text_primary)),
                 ]);
                 (line, None)
             } else {
@@ -1005,10 +1182,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
                 let line = Line::from(vec![
                     Span::raw("  "),
                     Span::styled(before, Style::default().fg(theme.text_primary)),
-                    Span::styled(
-                        "\u{2588}",
-                        Style::default().fg(theme.accent),
-                    ),
+                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
                     Span::styled(after, Style::default().fg(theme.text_primary)),
                 ]);
                 (line, None)
@@ -1023,7 +1197,7 @@ fn render_input(frame: &mut Frame, area: Rect, input: &InputBuffer, mode: &Mode,
     frame.render_widget(paragraph, area);
 
     if let Some(col) = cursor_pos {
-        let x = area.x + col as u16;
+        let x = area.x + col;
         let y = area.y + 1;
         #[allow(deprecated)]
         frame.set_cursor(x, y);

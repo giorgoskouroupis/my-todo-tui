@@ -1,16 +1,19 @@
 [package]
 name = "todo-tui"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "A terminal todo app for niri"
+
+[[bin]]
+name = "todo"
+path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
-arboard = "3"
+arboard = { version = "3", default-features = false }
 
 [profile.release]
 codegen-units = 1

@@ -148,10 +148,7 @@ impl InputBuffer {
 
     fn update_selection_on_move(&mut self, select: bool) {
         if select {
-            let start = self
-                .selection
-                .map(|(s, _)| s)
-                .unwrap_or(self.cursor);
+            let start = self.selection.map(|(s, _)| s).unwrap_or(self.cursor);
             self.selection = Some((start, self.cursor));
         } else {
             self.selection = None;
@@ -160,7 +157,11 @@ impl InputBuffer {
 
     fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.selection {
-            let (lo, hi) = if start < end { (start, end) } else { (end, start) };
+            let (lo, hi) = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
             if lo < hi {
                 self.text.drain(lo..hi);
                 self.cursor = lo;

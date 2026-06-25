@@ -56,28 +56,82 @@ fn hex_to_color(hex: &str) -> Option<ratatui::style::Color> {
 }
 
 fn apply_theme_overrides(theme: &mut Theme, overrides: &ThemeConfig) {
-    if let Some(v) = &overrides.bg_primary { if let Some(c) = hex_to_color(v) { theme.bg_primary = c; } }
-    if let Some(v) = &overrides.bg_secondary { if let Some(c) = hex_to_color(v) { theme.bg_secondary = c; } }
-    if let Some(v) = &overrides.bg_tertiary { if let Some(c) = hex_to_color(v) { theme.bg_tertiary = c; } }
-    if let Some(v) = &overrides.accent { if let Some(c) = hex_to_color(v) { theme.accent = c; } }
-    if let Some(v) = &overrides.accent_selection { if let Some(c) = hex_to_color(v) { theme.accent_selection = c; } }
-    if let Some(v) = &overrides.success { if let Some(c) = hex_to_color(v) { theme.success = c; } }
-    if let Some(v) = &overrides.warning { if let Some(c) = hex_to_color(v) { theme.warning = c; } }
-    if let Some(v) = &overrides.error { if let Some(c) = hex_to_color(v) { theme.error = c; } }
-    if let Some(v) = &overrides.text_primary { if let Some(c) = hex_to_color(v) { theme.text_primary = c; } }
-    if let Some(v) = &overrides.text_secondary { if let Some(c) = hex_to_color(v) { theme.text_secondary = c; } }
-    if let Some(v) = &overrides.text_muted { if let Some(c) = hex_to_color(v) { theme.text_muted = c; } }
-    if let Some(v) = &overrides.text_disabled { if let Some(c) = hex_to_color(v) { theme.text_disabled = c; } }
-    if let Some(v) = &overrides.text_placeholder { if let Some(c) = hex_to_color(v) { theme.text_placeholder = c; } }
-    if let Some(v) = &overrides.border_default { if let Some(c) = hex_to_color(v) { theme.border_default = c; } }
+    if let Some(v) = &overrides.bg_primary {
+        if let Some(c) = hex_to_color(v) {
+            theme.bg_primary = c;
+        }
+    }
+    if let Some(v) = &overrides.bg_secondary {
+        if let Some(c) = hex_to_color(v) {
+            theme.bg_secondary = c;
+        }
+    }
+    if let Some(v) = &overrides.bg_tertiary {
+        if let Some(c) = hex_to_color(v) {
+            theme.bg_tertiary = c;
+        }
+    }
+    if let Some(v) = &overrides.accent {
+        if let Some(c) = hex_to_color(v) {
+            theme.accent = c;
+        }
+    }
+    if let Some(v) = &overrides.accent_selection {
+        if let Some(c) = hex_to_color(v) {
+            theme.accent_selection = c;
+        }
+    }
+    if let Some(v) = &overrides.success {
+        if let Some(c) = hex_to_color(v) {
+            theme.success = c;
+        }
+    }
+    if let Some(v) = &overrides.warning {
+        if let Some(c) = hex_to_color(v) {
+            theme.warning = c;
+        }
+    }
+    if let Some(v) = &overrides.error {
+        if let Some(c) = hex_to_color(v) {
+            theme.error = c;
+        }
+    }
+    if let Some(v) = &overrides.text_primary {
+        if let Some(c) = hex_to_color(v) {
+            theme.text_primary = c;
+        }
+    }
+    if let Some(v) = &overrides.text_secondary {
+        if let Some(c) = hex_to_color(v) {
+            theme.text_secondary = c;
+        }
+    }
+    if let Some(v) = &overrides.text_muted {
+        if let Some(c) = hex_to_color(v) {
+            theme.text_muted = c;
+        }
+    }
+    if let Some(v) = &overrides.text_disabled {
+        if let Some(c) = hex_to_color(v) {
+            theme.text_disabled = c;
+        }
+    }
+    if let Some(v) = &overrides.text_placeholder {
+        if let Some(c) = hex_to_color(v) {
+            theme.text_placeholder = c;
+        }
+    }
+    if let Some(v) = &overrides.border_default {
+        if let Some(c) = hex_to_color(v) {
+            theme.border_default = c;
+        }
+    }
 }
 
 fn config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
 
     base.join("todo-tui").join("config.json")
