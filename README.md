@@ -22,7 +22,7 @@ nix develop --command cargo test
 
 ```sh
 cargo install --path .
-todo
+todo-tui
 ```
 
 ## Core Controls
@@ -41,11 +41,13 @@ todo
 | `s` | Sort picker |
 | `Left` / `Right` | Switch between items and category sidebar |
 | `Ctrl+K` | Assign category |
-| `Ctrl+D` | Open due-date prompt |
+| `Ctrl+D` | Open due-date calendar |
 | `/` | Command mode |
 | `Ctrl+C` | Quit |
 
-Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`.
+Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`. `/delete` bulk-selects items from the items pane and categories from the category sidebar.
+
+Due-date calendar keys: `Tab` switches focus between the calendar and the bottom date prompt. In calendar focus, arrows move by day/week, `PageUp`/`PageDown` change month, `t` jumps to today, and `Delete` clears. In prompt focus, type digits or `-` to edit `YYYY-MM-DD`, and arrows move the cursor. `Enter` saves a valid date and `Esc` cancels.
 
 ## Storage
 
@@ -75,4 +77,3 @@ The runtime dependency set is intentionally small:
 - `crossterm` for terminal control and input events
 - `serde` and `serde_json` for local JSON storage/config
 - `arboard` with default features disabled for text-only system clipboard support
-

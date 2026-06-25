@@ -9,6 +9,7 @@ use std::io::{self, Stdout};
 use crate::clip::Clipboard;
 use crate::config;
 use crate::data::{Priority, TodoData, TodoItem};
+use crate::date::Date;
 use crate::keys;
 use crate::ui::input::InputBuffer;
 use crate::ui::theme::Theme;
@@ -44,6 +45,7 @@ pub enum Mode {
     MultiSelect {
         cmd: MultiSelectCmd,
         selected: HashSet<u64>,
+        selected_categories: HashSet<String>,
     },
     ThemePicker {
         selected: usize,
@@ -65,11 +67,13 @@ pub enum Mode {
     SortPicker {
         selected: usize,
     },
-    DueDateInput {
+    DueDateCalendar {
         edit_id: Option<u64>,
         saved_text: String,
         from_new: bool,
         from_normal: bool,
+        selected: Date,
+        prompt_focused: bool,
     },
 }
 
@@ -92,6 +96,7 @@ pub enum Action {
     ExecuteCommand(String),
     TabComplete,
     ToggleMultiSelect(u64),
+    ToggleCategoryMultiSelect(String),
     ConfirmMultiSelect,
     CancelMultiSelect,
     ThemeSelect(usize),
@@ -120,6 +125,12 @@ pub enum Action {
     CancelSortPicker,
     SubmitDueDate,
     CancelDueDate,
+    CalendarMove(i32),
+    CalendarMonth(i32),
+    CalendarToday,
+    CalendarClear,
+    CalendarTextChanged,
+    CalendarToggleFocus,
     Quit,
 }
 
@@ -206,7 +217,11 @@ impl App {
             }
             SortMode::DueDate => {
                 items.sort_by_key(|i| {
-                    let due = i.due_date.as_deref().unwrap_or("9999-99-99").to_string();
+                    let due = i.due_date.as_deref().and_then(Date::parse).unwrap_or(Date {
+                        year: 9999,
+                        month: 12,
+                        day: 31,
+                    });
                     (!i.pinned, due)
                 });
             }
@@ -226,6 +241,32 @@ impl App {
     fn clamp_selection(&mut self) {
         let max = self.items().len().saturating_sub(1);
         self.selected_index = self.selected_index.min(max);
+    }
+
+    fn initial_due_date(&self, edit_id: Option<u64>) -> Date {
+        edit_id
+            .and_then(|id| self.data.get(id))
+            .and_then(|item| item.due_date.as_deref())
+            .and_then(Date::parse)
+            .or_else(|| self.pending_due_date.as_deref().and_then(Date::parse))
+            .unwrap_or_else(Date::today)
+    }
+
+    fn restore_after_due_date(
+        &mut self,
+        edit_id: Option<u64>,
+        saved_text: String,
+        from_new: bool,
+        from_normal: bool,
+    ) {
+        if from_new || from_normal {
+            self.input.clear();
+            self.mode = Mode::Normal;
+            self.clamp_selection();
+        } else {
+            self.input.set_text(&saved_text);
+            self.mode = Mode::Editing { edit_id };
+        }
     }
 
     pub fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
@@ -368,8 +409,12 @@ impl App {
                 action
             }
             Mode::MultiSelect { .. } => {
-                let items = self.items();
-                keys::handle_multiselect(key, &items, self.selected_index)
+                if self.pane == Pane::Categories {
+                    keys::handle_category_multiselect(key, &self.data, self.category_index)
+                } else {
+                    let items = self.items();
+                    keys::handle_multiselect(key, &items, self.selected_index)
+                }
             }
             Mode::ThemePicker { selected } => {
                 let action = keys::handle_theme_picker(key);
@@ -424,7 +469,9 @@ impl App {
                 action
             }
             Mode::ConfirmDelete { .. } => keys::handle_confirm_delete(key),
-            Mode::DueDateInput { .. } => keys::handle_due_date_input(key, &mut self.input),
+            Mode::DueDateCalendar { prompt_focused, .. } => {
+                keys::handle_due_date_calendar(key, &mut self.input, *prompt_focused)
+            }
             Mode::Help | Mode::Keybindings => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
                 _ => None,
@@ -567,12 +614,15 @@ impl App {
                     }
                 }
                 if let Some(id) = created_id {
-                    self.input.clear();
-                    self.mode = Mode::DueDateInput {
+                    let selected = self.initial_due_date(Some(id));
+                    self.input.set_text(&selected.iso());
+                    self.mode = Mode::DueDateCalendar {
                         edit_id: Some(id),
                         saved_text: String::new(),
                         from_new: true,
                         from_normal: false,
+                        selected,
+                        prompt_focused: false,
                     };
                 } else {
                     self.input.clear();
@@ -679,12 +729,15 @@ impl App {
                         self.mode = Mode::MultiSelect {
                             cmd: MultiSelectCmd::Delete,
                             selected: HashSet::new(),
+                            selected_categories: HashSet::new(),
                         };
                     }
                     "done" | "x" => {
+                        self.pane = Pane::Items;
                         self.mode = Mode::MultiSelect {
                             cmd: MultiSelectCmd::ToggleDone,
                             selected: HashSet::new(),
+                            selected_categories: HashSet::new(),
                         };
                     }
                     "clear" | "c" => {
@@ -743,15 +796,46 @@ impl App {
                     }
                 }
             }
+            Action::ToggleCategoryMultiSelect(name) => {
+                if let Mode::MultiSelect {
+                    ref mut selected_categories,
+                    ..
+                } = &mut self.mode
+                {
+                    if !selected_categories.insert(name.clone()) {
+                        selected_categories.remove(&name);
+                    }
+                }
+            }
             Action::ConfirmMultiSelect => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
-                if let Mode::MultiSelect { cmd, selected } = mode {
+                if let Mode::MultiSelect {
+                    cmd,
+                    selected,
+                    selected_categories,
+                } = mode
+                {
                     match cmd {
                         MultiSelectCmd::Delete => {
                             for id in &selected {
                                 if let Some(item) = self.data.delete(*id) {
                                     self.clip.cut(item);
                                 }
+                            }
+                            for category in &selected_categories {
+                                let ids: Vec<u64> = self
+                                    .data
+                                    .items()
+                                    .iter()
+                                    .filter(|i| i.category.as_deref() == Some(category.as_str()))
+                                    .map(|i| i.id)
+                                    .collect();
+                                for id in ids {
+                                    if let Some(item) = self.data.delete(id) {
+                                        self.clip.cut(item);
+                                    }
+                                }
+                                self.data.remove_category(category);
                             }
                             self.mark_dirty();
                         }
@@ -760,6 +844,12 @@ impl App {
                                 self.data.toggle_done(*id);
                             }
                             self.mark_dirty();
+                        }
+                    }
+                    if let Some(ref cat) = self.category_filter {
+                        if !self.data.categories().contains(cat) {
+                            self.category_filter = None;
+                            self.category_index = 0;
                         }
                     }
                     self.clamp_selection();
@@ -858,60 +948,122 @@ impl App {
                     _ => return false,
                 };
                 let saved_text = self.input.text().to_string();
-                self.input.clear();
-                self.mode = Mode::DueDateInput {
+                let selected = self.initial_due_date(edit_id);
+                self.input.set_text(&selected.iso());
+                self.mode = Mode::DueDateCalendar {
                     edit_id,
                     saved_text,
                     from_new: false,
                     from_normal,
+                    selected,
+                    prompt_focused: false,
                 };
             }
             Action::SubmitDueDate => {
-                let text = self.input.text().to_string();
-                let text = text.trim().to_string();
-                let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
-                    Mode::DueDateInput {
+                let (edit_id, saved_text, from_new, from_normal, date) = match &self.mode {
+                    Mode::DueDateCalendar {
                         edit_id,
                         saved_text,
                         from_new,
                         from_normal,
-                    } => (*edit_id, saved_text.clone(), *from_new, *from_normal),
-                    _ => (None, String::new(), false, false),
+                        ..
+                    } => (
+                        *edit_id,
+                        saved_text.clone(),
+                        *from_new,
+                        *from_normal,
+                        Date::parse(self.input.text().trim()).map(Date::iso),
+                    ),
+                    _ => (None, String::new(), false, false, Some(String::new())),
                 };
-                if !text.is_empty() {
+                let Some(date) = date else {
+                    return false;
+                };
+                if !date.is_empty() {
                     if let Some(id) = edit_id {
-                        self.data.set_due_date(id, Some(text));
+                        self.data.set_due_date(id, Some(date));
                         self.mark_dirty();
                     } else {
-                        self.pending_due_date = Some(text);
+                        self.pending_due_date = Some(date);
                     }
                 }
-                if from_new || from_normal {
-                    self.input.clear();
-                    self.mode = Mode::Normal;
-                    self.clamp_selection();
-                } else {
-                    self.input.set_text(&saved_text);
-                    self.mode = Mode::Editing { edit_id };
-                }
+                self.restore_after_due_date(edit_id, saved_text, from_new, from_normal);
             }
             Action::CancelDueDate => {
                 let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
-                    Mode::DueDateInput {
+                    Mode::DueDateCalendar {
                         edit_id,
                         saved_text,
                         from_new,
                         from_normal,
+                        ..
                     } => (*edit_id, saved_text.clone(), *from_new, *from_normal),
                     _ => (None, String::new(), false, false),
                 };
-                if from_new || from_normal {
-                    self.input.clear();
-                    self.mode = Mode::Normal;
-                    self.clamp_selection();
+                self.restore_after_due_date(edit_id, saved_text, from_new, from_normal);
+            }
+            Action::CalendarMove(days) => {
+                let mut next = None;
+                if let Mode::DueDateCalendar { selected, .. } = &mut self.mode {
+                    *selected = selected.add_days(days);
+                    next = Some(selected.iso());
+                }
+                if let Some(date) = next {
+                    self.input.set_text(&date);
+                }
+            }
+            Action::CalendarMonth(months) => {
+                let mut next = None;
+                if let Mode::DueDateCalendar { selected, .. } = &mut self.mode {
+                    *selected = selected.add_months(months);
+                    next = Some(selected.iso());
+                }
+                if let Some(date) = next {
+                    self.input.set_text(&date);
+                }
+            }
+            Action::CalendarToday => {
+                let today = Date::today();
+                if let Mode::DueDateCalendar { selected, .. } = &mut self.mode {
+                    *selected = today;
+                }
+                self.input.set_text(&today.iso());
+            }
+            Action::CalendarClear => {
+                let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
+                    Mode::DueDateCalendar {
+                        edit_id,
+                        saved_text,
+                        from_new,
+                        from_normal,
+                        ..
+                    } => (*edit_id, saved_text.clone(), *from_new, *from_normal),
+                    _ => (None, String::new(), false, false),
+                };
+                if let Some(id) = edit_id {
+                    self.data.set_due_date(id, None);
+                    self.mark_dirty();
                 } else {
-                    self.input.set_text(&saved_text);
-                    self.mode = Mode::Editing { edit_id };
+                    self.pending_due_date = None;
+                }
+                self.restore_after_due_date(edit_id, saved_text, from_new, from_normal);
+            }
+            Action::CalendarTextChanged => {
+                if let Mode::DueDateCalendar {
+                    selected,
+                    prompt_focused,
+                    ..
+                } = &mut self.mode
+                {
+                    *prompt_focused = true;
+                    if let Some(date) = Date::parse(self.input.text().trim()) {
+                        *selected = date;
+                    }
+                }
+            }
+            Action::CalendarToggleFocus => {
+                if let Mode::DueDateCalendar { prompt_focused, .. } = &mut self.mode {
+                    *prompt_focused = !*prompt_focused;
                 }
             }
             Action::SwitchPane => {

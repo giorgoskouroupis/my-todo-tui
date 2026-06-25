@@ -1,12 +1,12 @@
 [package]
 name = "todo-tui"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "A terminal todo app for niri"
 
 [[bin]]
-name = "todo"
-path = "src/main.rs"
+name = "todo-tui"
+path = "src/bin/todo-tui.rs"
 
 [dependencies]
 ratatui = "0.29"

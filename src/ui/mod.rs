@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListState, Paragraph};
 
 use crate::app::{get_filtered_commands, Mode, Pane, SortMode};
 use crate::data::{Priority, TodoItem};
+use crate::date::{self, Date};
 
 use self::input::InputBuffer;
 use self::theme::Theme;
@@ -43,6 +44,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     render_sidebar(
         frame,
         h_layout[0],
+        state.mode,
         state.pane,
         state.category_index,
         state.categories,
@@ -55,6 +57,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         state.input,
         state.mode,
         state.filter,
+        state.pane,
         state.theme,
     );
 
@@ -75,6 +78,13 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         render_keybindings_popup(frame, popup_area, state.theme);
     } else if let Mode::ConfirmDelete { texts, .. } = state.mode {
         render_confirm_delete_popup(frame, popup_area, texts, state.theme);
+    } else if let Mode::DueDateCalendar {
+        selected,
+        prompt_focused,
+        ..
+    } = state.mode
+    {
+        render_calendar_popup(frame, popup_area, *selected, *prompt_focused, state.theme);
     }
 }
 
@@ -158,11 +168,19 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
 fn render_sidebar(
     frame: &mut Frame,
     area: Rect,
+    mode: &Mode,
     pane: &Pane,
     category_index: usize,
     categories: &[String],
     theme: &Theme,
 ) {
+    let selected_categories = match mode {
+        Mode::MultiSelect {
+            selected_categories,
+            ..
+        } => Some(selected_categories),
+        _ => None,
+    };
     let is_active = *pane == Pane::Categories;
     let content_width = area.width.saturating_sub(1).max(10) as usize;
     let name_width = content_width.saturating_sub(4).max(4);
@@ -196,8 +214,11 @@ fn render_sidebar(
         let idx = i + 1;
         let hl = is_active && category_index == idx;
         let is_filter = !is_active && category_index == idx;
+        let multi_selected = selected_categories.is_some_and(|selected| selected.contains(cat));
         let bg = if hl || is_filter {
             theme.bg_tertiary
+        } else if multi_selected {
+            theme.accent_selection
         } else {
             theme.bg_primary
         };
@@ -210,7 +231,10 @@ fn render_sidebar(
             })
             .bg(bg);
 
-        let bullet = Span::styled("  ", Style::default().fg(theme.accent));
+        let bullet = Span::styled(
+            if multi_selected { "x " } else { "  " },
+            Style::default().fg(theme.accent),
+        );
 
         let wrapped = wrap_text(cat, name_width);
         for (j, seg) in wrapped.iter().enumerate() {
@@ -810,6 +834,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Enter", "Select/filter category", false),
         ("a", "Add category", false),
         ("Delete", "Delete category", false),
+        ("/delete", "Bulk-select categories", false),
         ("", "", false),
         ("Editing", "", true),
         ("Enter", "Submit", false),
@@ -820,6 +845,18 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Ctrl+←/→", "Word jump", false),
         ("Ctrl+Shift+C", "Copy selection", false),
         ("Ctrl+Shift+V", "Paste", false),
+        ("", "", false),
+        ("Due date", "", true),
+        ("Tab", "Switch calendar/prompt", false),
+        ("calendar arrows", "Move day/week", false),
+        ("prompt arrows", "Move cursor", false),
+        ("digits / -", "Edit date prompt", false),
+        ("PgUp/PgDn", "Previous/next month", false),
+        ("t", "Today", false),
+        ("Backspace", "Edit date text", false),
+        ("Delete", "Clear due date", false),
+        ("Enter", "Save valid date", false),
+        ("Esc", "Cancel", false),
     ];
 
     let mut lines = Vec::new();
@@ -992,12 +1029,174 @@ pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
     result
 }
 
+fn render_calendar_popup(
+    frame: &mut Frame,
+    area: Rect,
+    selected: Date,
+    prompt_focused: bool,
+    theme: &Theme,
+) {
+    let width = 40;
+    let height = 13;
+    let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, width, height);
+
+    let today = Date::today();
+    let first = Date::new(selected.year, selected.month, 1).unwrap_or(selected);
+    let first_weekday = first.weekday_monday0();
+    let days_in_month = date::days_in_month(selected.year, selected.month);
+
+    let mut lines = Vec::new();
+    lines.push(
+        Line::from(vec![Span::styled(
+            format!("  {} {}  ", date::month_name(selected.month), selected.year),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )])
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(theme.bg_secondary)),
+    );
+    lines.push(
+        Line::from(vec![Span::styled(
+            "  Mon  Tue  Wed  Thu  Fri  Sat  Sun",
+            Style::default().fg(theme.text_muted),
+        )])
+        .style(Style::default().bg(theme.bg_secondary)),
+    );
+
+    let mut day = 1u32;
+    for week in 0..6 {
+        let mut spans = vec![Span::raw(" ")];
+        for weekday in 0..7 {
+            let cell_index = week * 7 + weekday;
+            if cell_index < first_weekday || day > days_in_month {
+                spans.push(Span::raw("     "));
+                continue;
+            }
+
+            let date = Date {
+                year: selected.year,
+                month: selected.month,
+                day,
+            };
+            let is_selected = date == selected;
+            let is_today = date == today;
+            let mut style = Style::default().fg(if prompt_focused {
+                theme.text_secondary
+            } else {
+                theme.text_primary
+            });
+            if is_today {
+                style = style.fg(theme.warning).add_modifier(Modifier::BOLD);
+            }
+            if is_selected {
+                style = if prompt_focused {
+                    style.fg(theme.accent).add_modifier(Modifier::BOLD)
+                } else {
+                    style
+                        .fg(theme.text_primary)
+                        .bg(theme.accent_selection)
+                        .add_modifier(Modifier::BOLD)
+                };
+            }
+
+            spans.push(Span::styled(format!(" {:>2}  ", day), style));
+            day += 1;
+        }
+        lines.push(Line::from(spans).style(Style::default().bg(theme.bg_secondary)));
+    }
+
+    lines.push(
+        Line::from(vec![Span::styled(
+            if prompt_focused {
+                "  Tab calendar   Enter save   Esc cancel"
+            } else {
+                "  Tab prompt   Arrows move   Pg month   t today   Del clear"
+            },
+            Style::default().fg(theme.text_muted),
+        )])
+        .style(Style::default().bg(theme.bg_secondary)),
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if prompt_focused {
+            theme.border_default
+        } else {
+            theme.accent
+        }))
+        .title(if prompt_focused {
+            " Due Date - Prompt * "
+        } else {
+            " Due Date - Calendar * "
+        })
+        .title_style(
+            Style::default()
+                .fg(if prompt_focused {
+                    theme.text_muted
+                } else {
+                    theme.accent
+                })
+                .add_modifier(if prompt_focused {
+                    Modifier::empty()
+                } else {
+                    Modifier::BOLD
+                }),
+        )
+        .style(Style::default().bg(theme.bg_secondary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_secondary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+fn render_calendar_date_field(
+    text: &str,
+    cursor: usize,
+    typed_valid: bool,
+    prompt_focused: bool,
+    theme: &Theme,
+) -> Line<'static> {
+    let focus_color = if prompt_focused {
+        theme.accent
+    } else {
+        theme.text_muted
+    };
+    let mut spans = vec![Span::styled("  Date: ", Style::default().fg(focus_color))];
+    let date_style = Style::default().fg(if typed_valid {
+        if prompt_focused {
+            theme.text_primary
+        } else {
+            theme.text_secondary
+        }
+    } else {
+        theme.warning
+    });
+    if text.is_empty() {
+        spans.push(Span::styled("\u{2588}", Style::default().fg(focus_color)));
+    } else {
+        let cursor = cursor.min(text.len());
+        let before = &text[..cursor];
+        let after = &text[cursor..];
+        spans.push(Span::styled(before.to_string(), date_style));
+        spans.push(Span::styled("\u{2588}", Style::default().fg(focus_color)));
+        spans.push(Span::styled(after.to_string(), date_style));
+    }
+    Line::from(spans)
+}
+
 fn render_input(
     frame: &mut Frame,
     area: Rect,
     input: &InputBuffer,
     mode: &Mode,
     filter: &str,
+    pane: &Pane,
     theme: &Theme,
 ) {
     let block = Block::default()
@@ -1029,9 +1228,16 @@ fn render_input(
 
             (Line::from(spans), None)
         }
-        Mode::MultiSelect { .. } => {
+        Mode::MultiSelect { cmd, .. } => {
+            let target = if matches!(pane, Pane::Categories)
+                && matches!(cmd, crate::app::MultiSelectCmd::Delete)
+            {
+                "categories"
+            } else {
+                "items"
+            };
             let line = Line::from(vec![Span::styled(
-                "  [select items, Enter to confirm, Esc to cancel]",
+                format!("  [select {target}, Enter to confirm, Esc to cancel]"),
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
@@ -1108,34 +1314,29 @@ fn render_input(
             )]);
             (line, None)
         }
-        Mode::DueDateInput { .. } => {
-            let text = input.text();
-            let cursor = input.cursor();
-            let white = Style::default().fg(Color::White);
-            let accent = Style::default().fg(theme.accent);
-            let cursor_style = Style::default().fg(theme.accent);
-            let spans = if text.is_empty() {
-                vec![
-                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
-                    Span::styled("\u{2588}", cursor_style),
-                ]
-            } else if cursor == 0 {
-                vec![
-                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
-                    Span::styled("\u{2588}", cursor_style),
-                    Span::styled(text, white),
-                ]
-            } else {
-                let before = &text[..cursor];
-                let after = &text[cursor..];
-                vec![
-                    Span::styled("  Due date (YYYY-MM-DD, Esc to skip): ", accent),
-                    Span::styled(before, white),
-                    Span::styled("\u{2588}", cursor_style),
-                    Span::styled(after, white),
-                ]
-            };
-            (Line::from(spans), None)
+        Mode::DueDateCalendar { prompt_focused, .. } => {
+            let typed = input.text();
+            let typed_valid = date::Date::parse(typed).is_some();
+            let mut line = render_calendar_date_field(
+                typed,
+                input.cursor(),
+                typed_valid,
+                *prompt_focused,
+                theme,
+            );
+            line.spans.push(Span::styled(
+                if *prompt_focused {
+                    "  Tab calendar   Enter save"
+                } else {
+                    "  Tab prompt   calendar active"
+                },
+                Style::default().fg(if *prompt_focused {
+                    theme.accent
+                } else {
+                    theme.text_muted
+                }),
+            ));
+            (line.style(Style::default().bg(theme.bg_primary)), None)
         }
         Mode::Editing { .. } => {
             let text = input.text();

@@ -72,6 +72,27 @@ fn handle_text_input_key(key: KeyEvent, input: &mut crate::ui::input::InputBuffe
     }
 }
 
+fn insert_calendar_digit(input: &mut crate::ui::input::InputBuffer, digit: char) {
+    let mut digits: String = input
+        .text()
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    if digits.len() >= 8 {
+        digits.clear();
+    }
+    digits.push(digit);
+
+    let mut formatted = String::new();
+    for (idx, ch) in digits.chars().take(8).enumerate() {
+        if idx == 4 || idx == 6 {
+            formatted.push('-');
+        }
+        formatted.push(ch);
+    }
+    input.set_text(&formatted);
+}
+
 pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -> Option<Action> {
     let idx = selected_index;
     let has_selection = idx < items.len();
@@ -169,6 +190,32 @@ pub fn handle_multiselect(
         }
         KeyCode::Char('x') if selected_id.is_some() => {
             Some(Action::ToggleMultiSelect(selected_id.unwrap()))
+        }
+        KeyCode::Enter => Some(Action::ConfirmMultiSelect),
+        KeyCode::Esc => Some(Action::CancelMultiSelect),
+        _ => None,
+    }
+}
+
+pub fn handle_category_multiselect(
+    key: KeyEvent,
+    data: &TodoData,
+    category_index: usize,
+) -> Option<Action> {
+    let selected_category = || {
+        let cats = data.categories();
+        if category_index > 0 && category_index <= cats.len() {
+            cats.get(category_index - 1).cloned()
+        } else {
+            None
+        }
+    };
+
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Char(' ') | KeyCode::Char('x') => {
+            selected_category().map(Action::ToggleCategoryMultiSelect)
         }
         KeyCode::Enter => Some(Action::ConfirmMultiSelect),
         KeyCode::Esc => Some(Action::CancelMultiSelect),
@@ -302,20 +349,66 @@ pub fn handle_sort_picker(key: KeyEvent) -> Option<Action> {
     }
 }
 
-pub fn handle_due_date_input(
+pub fn handle_due_date_calendar(
     key: KeyEvent,
     input: &mut crate::ui::input::InputBuffer,
+    prompt_focused: bool,
 ) -> Option<Action> {
+    if key.code == KeyCode::Tab {
+        return Some(Action::CalendarToggleFocus);
+    }
+
+    if prompt_focused {
+        return match key.code {
+            KeyCode::Enter => Some(Action::SubmitDueDate),
+            KeyCode::Esc => Some(Action::CancelDueDate),
+            KeyCode::Char(c)
+                if (c.is_ascii_digit() || c == '-')
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                input.insert_char(c);
+                Some(Action::CalendarTextChanged)
+            }
+            KeyCode::Char(_) => None,
+            _ => {
+                if handle_text_input_key(key, input) {
+                    Some(Action::CalendarTextChanged)
+                } else {
+                    None
+                }
+            }
+        };
+    }
+
     match key.code {
+        KeyCode::Left | KeyCode::Char('h') => Some(Action::CalendarMove(-1)),
+        KeyCode::Right | KeyCode::Char('l') => Some(Action::CalendarMove(1)),
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::CalendarMove(-7)),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::CalendarMove(7)),
+        KeyCode::PageUp => Some(Action::CalendarMonth(-1)),
+        KeyCode::PageDown => Some(Action::CalendarMonth(1)),
+        KeyCode::Char('t') => Some(Action::CalendarToday),
+        KeyCode::Delete => Some(Action::CalendarClear),
         KeyCode::Enter => Some(Action::SubmitDueDate),
-        KeyCode::Esc => {
+        KeyCode::Esc => Some(Action::CancelDueDate),
+        KeyCode::Char(c)
+            if c.is_ascii_digit()
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            insert_calendar_digit(input, c);
+            Some(Action::CalendarTextChanged)
+        }
+        KeyCode::Char('-')
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
             input.clear();
-            Some(Action::CancelDueDate)
+            input.insert_char('-');
+            Some(Action::CalendarTextChanged)
         }
-        _ => {
-            handle_text_input_key(key, input);
-            None
-        }
+        _ => None,
     }
 }
 

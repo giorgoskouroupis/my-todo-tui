@@ -3,6 +3,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::ListItem;
 
 use crate::data::{Priority, TodoItem};
+use crate::date;
 
 use super::theme::Theme;
 
@@ -13,47 +14,6 @@ fn priority_color(p: Priority, theme: &Theme) -> ratatui::style::Color {
         Priority::High => theme.warning,
         Priority::Urgent => theme.error,
     }
-}
-
-fn is_leap_year(year: u64) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
-}
-
-fn today_iso() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let mut days = secs / 86400;
-    let mut y = 1970u64;
-    loop {
-        let yd = if is_leap_year(y) { 366 } else { 365 };
-        if days < yd {
-            break;
-        }
-        days -= yd;
-        y += 1;
-    }
-    let month_days: [u64; 12] = if is_leap_year(y) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut m = 1u64;
-    for &md in &month_days {
-        if days < md {
-            break;
-        }
-        days -= md;
-        m += 1;
-    }
-    let d = days + 1;
-    format!("{:04}-{:02}-{:02}", y, m, d)
-}
-
-fn is_overdue(due_date: &str) -> bool {
-    let today = today_iso();
-    due_date.as_bytes() <= today.as_bytes() && due_date.len() == 10
 }
 
 fn highlight_matches<'a>(
@@ -103,7 +63,7 @@ pub fn render_item(
         theme.bg_secondary
     };
 
-    let is_overdue_item = !item.done && item.due_date.as_deref().is_some_and(is_overdue);
+    let is_overdue_item = !item.done && item.due_date.as_deref().is_some_and(date::is_overdue);
 
     let title_style = if item.done {
         Style::default()
