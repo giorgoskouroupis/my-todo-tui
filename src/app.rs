@@ -8,7 +8,7 @@ use std::io::{self, Stdout};
 
 use crate::clip::Clipboard;
 use crate::config;
-use crate::data::{Priority, TodoData, TodoItem};
+use crate::data::{category_matches, normalize_category, Priority, TodoData, TodoItem};
 use crate::date::Date;
 use crate::keys;
 use crate::ui::input::InputBuffer;
@@ -63,7 +63,18 @@ pub enum Mode {
     CategoryPicker {
         selected: usize,
     },
-    CategoryAdd,
+    CategoryCreateChoice {
+        selected: usize,
+        parent: Option<String>,
+        name: String,
+    },
+    CategoryParentPicker {
+        selected: usize,
+        name: String,
+    },
+    CategoryAdd {
+        parent: Option<String>,
+    },
     SortPicker {
         selected: usize,
     },
@@ -97,6 +108,7 @@ pub enum Action {
     TabComplete,
     ToggleMultiSelect(u64),
     ToggleCategoryMultiSelect(String),
+    SelectAllMultiSelect,
     ConfirmMultiSelect,
     CancelMultiSelect,
     ThemeSelect(usize),
@@ -114,10 +126,11 @@ pub enum Action {
     OpenCategoryPicker,
     CategorySelect(usize),
     AddCategory(String),
+    AddCategoryChoice(usize),
+    SelectCategoryParent(usize),
     CreateAndAssignCategory(String),
     DeleteCategory(String),
     CancelCategoryPicker,
-    StartCategoryAdd,
     StartCategoryAddWithChar(char),
     CancelCategoryAdd,
     StartSortPicker,
@@ -131,6 +144,7 @@ pub enum Action {
     CalendarClear,
     CalendarTextChanged,
     CalendarToggleFocus,
+    SwitchCategoryFilter(i32, bool),
     Quit,
 }
 
@@ -195,7 +209,7 @@ impl App {
         let items: Vec<TodoItem> = match &self.category_filter {
             Some(cat) => items
                 .into_iter()
-                .filter(|i| i.category.as_deref() == Some(cat.as_str()))
+                .filter(|i| category_matches(i.category.as_deref(), cat))
                 .collect(),
             None => items,
         };
@@ -269,6 +283,106 @@ impl App {
         }
     }
 
+    fn current_category_parent(&self) -> Option<String> {
+        if self.category_index == 0 {
+            return None;
+        }
+        let entries = self.data.category_entries();
+        let path = entries.get(self.category_index - 1)?.path.as_str();
+        let parent = path.split_once('/').map_or(path, |(parent, _)| parent);
+        normalize_category(parent)
+    }
+
+    fn root_categories(&self) -> Vec<String> {
+        let mut roots: Vec<String> = self
+            .data
+            .categories()
+            .iter()
+            .filter_map(|cat| cat.split('/').next())
+            .filter_map(normalize_category)
+            .collect();
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+
+    fn category_from_input(parent: Option<&str>, name: &str) -> Option<String> {
+        let name = normalize_category(name)?;
+        if name.contains('/') {
+            Some(name)
+        } else if let Some(parent) = parent {
+            normalize_category(&format!("{parent}/{name}"))
+        } else {
+            Some(name)
+        }
+    }
+
+    fn set_category_index(&mut self, idx: usize) {
+        let cats = self.data.category_entries();
+        self.category_index = idx.min(cats.len());
+        self.category_filter = if self.category_index == 0 {
+            None
+        } else {
+            cats.get(self.category_index - 1)
+                .map(|entry| entry.path.clone())
+        };
+        self.clamp_selection();
+    }
+
+    fn switch_category_filter(&mut self, direction: i32, parent_only: bool) {
+        let cats = self.data.category_entries();
+        if parent_only {
+            let parent_indices: Vec<usize> = std::iter::once(0)
+                .chain(
+                    cats.iter()
+                        .enumerate()
+                        .filter(|(_, entry)| entry.depth == 0)
+                        .map(|(idx, _)| idx + 1),
+                )
+                .collect();
+            let current_parent = parent_indices
+                .iter()
+                .rev()
+                .copied()
+                .find(|idx| *idx <= self.category_index)
+                .unwrap_or(0);
+            let pos = parent_indices
+                .iter()
+                .position(|idx| *idx == current_parent)
+                .unwrap_or(0);
+            let next_pos = if direction < 0 {
+                pos.saturating_sub(1)
+            } else {
+                (pos + 1).min(parent_indices.len().saturating_sub(1))
+            };
+            if let Some(idx) = parent_indices.get(next_pos) {
+                self.set_category_index(*idx);
+            }
+        } else {
+            let max = cats.len();
+            let next = if direction < 0 {
+                self.category_index.saturating_sub(1)
+            } else {
+                (self.category_index + 1).min(max)
+            };
+            self.set_category_index(next);
+        }
+    }
+
+    fn finish_add_category(&mut self, name: String) {
+        self.data.add_category(&name);
+        self.mark_dirty();
+        let cats = self.data.category_entries();
+        if let Some(pos) = cats.iter().position(|c| c.path == name) {
+            self.category_index = pos + 1;
+        }
+        self.category_filter = Some(name);
+        self.pane = Pane::Categories;
+        self.clamp_selection();
+        self.input.clear();
+        self.mode = Mode::Normal;
+    }
+
     pub fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
         let mut app = Self::new();
 
@@ -278,6 +392,7 @@ impl App {
             terminal.draw(|f| {
                 let items = app.items();
                 let categories = app.data.categories();
+                let category_entries = app.data.category_entries();
                 crate::ui::render(
                     f,
                     crate::ui::RenderState {
@@ -291,6 +406,7 @@ impl App {
                         pane: &app.pane,
                         category_index: app.category_index,
                         categories: &categories,
+                        category_entries: &category_entries,
                         theme: &app.theme,
                         sort_mode: &app.sort_mode,
                     },
@@ -340,7 +456,7 @@ impl App {
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
         if key.code == KeyCode::Char('/')
-            && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd)
+            && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
         {
             return Some(Action::StartCommand);
         }
@@ -361,6 +477,18 @@ impl App {
             match key.code {
                 KeyCode::Left if self.pane == Pane::Items => return Some(Action::SwitchPane),
                 KeyCode::Right if self.pane == Pane::Categories => return Some(Action::SwitchPane),
+                KeyCode::PageUp => {
+                    return Some(Action::SwitchCategoryFilter(
+                        -1,
+                        key.modifiers.contains(KeyModifiers::CONTROL),
+                    ));
+                }
+                KeyCode::PageDown => {
+                    return Some(Action::SwitchCategoryFilter(
+                        1,
+                        key.modifiers.contains(KeyModifiers::CONTROL),
+                    ));
+                }
                 _ => {}
             }
         }
@@ -368,7 +496,8 @@ impl App {
         match &self.mode {
             Mode::Normal => {
                 if self.pane == Pane::Categories {
-                    keys::handle_sidebar(key, &self.data, self.category_index)
+                    let entries = self.data.category_entries();
+                    keys::handle_sidebar(key, &entries, self.category_index)
                 } else {
                     let items = self.items();
                     keys::handle_normal(key, &items, self.selected_index)
@@ -410,7 +539,8 @@ impl App {
             }
             Mode::MultiSelect { .. } => {
                 if self.pane == Pane::Categories {
-                    keys::handle_category_multiselect(key, &self.data, self.category_index)
+                    let entries = self.data.category_entries();
+                    keys::handle_category_multiselect(key, &entries, self.category_index)
                 } else {
                     let items = self.items();
                     keys::handle_multiselect(key, &items, self.selected_index)
@@ -460,7 +590,9 @@ impl App {
                     }
                 }
             }
-            Mode::CategoryAdd => keys::handle_category_add(key, &mut self.input),
+            Mode::CategoryCreateChoice { .. } => keys::handle_category_create_choice(key),
+            Mode::CategoryParentPicker { .. } => keys::handle_category_parent_picker(key),
+            Mode::CategoryAdd { .. } => keys::handle_category_add(key, &mut self.input),
             Mode::SortPicker { selected } => {
                 let action = keys::handle_sort_picker(key);
                 if action.is_none() && key.code == KeyCode::Enter {
@@ -502,14 +634,29 @@ impl App {
                     if *selected > 0 {
                         *selected -= 1;
                     }
+                } else if let Mode::CategoryCreateChoice {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::CategoryParentPicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
                 } else if self.pane == Pane::Categories {
                     if self.category_index > 0 {
                         self.category_index -= 1;
-                        let cats = self.data.categories();
+                        let cats = self.data.category_entries();
                         self.category_filter = if self.category_index == 0 {
                             None
                         } else {
-                            cats.get(self.category_index - 1).cloned()
+                            cats.get(self.category_index - 1)
+                                .map(|entry| entry.path.clone())
                         };
                         self.clamp_selection();
                     }
@@ -545,11 +692,30 @@ impl App {
                     if *selected < cats.len() {
                         *selected += 1;
                     }
+                } else if let Mode::CategoryCreateChoice {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
+                    if *selected < 1 {
+                        *selected += 1;
+                    }
+                } else if matches!(self.mode, Mode::CategoryParentPicker { .. }) {
+                    let max = self.root_categories().len().saturating_sub(1);
+                    if let Mode::CategoryParentPicker {
+                        ref mut selected, ..
+                    } = &mut self.mode
+                    {
+                        if *selected < max {
+                            *selected += 1;
+                        }
+                    }
                 } else if self.pane == Pane::Categories {
-                    let cats = self.data.categories();
+                    let cats = self.data.category_entries();
                     if self.category_index < cats.len() {
                         self.category_index += 1;
-                        self.category_filter = cats.get(self.category_index - 1).cloned();
+                        self.category_filter = cats
+                            .get(self.category_index - 1)
+                            .map(|entry| entry.path.clone());
                         self.clamp_selection();
                     }
                 } else {
@@ -587,8 +753,8 @@ impl App {
                                 self.mark_dirty();
                                 if let Some(ref cat) = self.category_filter {
                                     self.data.set_category(id, Some(cat.clone()));
-                                    let cats = self.data.categories();
-                                    if let Some(pos) = cats.iter().position(|c| c == cat) {
+                                    let cats = self.data.category_entries();
+                                    if let Some(pos) = cats.iter().position(|c| c.path == *cat) {
                                         self.category_index = pos + 1;
                                     }
                                 }
@@ -605,7 +771,12 @@ impl App {
                         }
                     } else if edit_id.is_none() {
                         if let Some(ref cat) = self.category_filter {
-                            if !self.data.categories().contains(cat) {
+                            if !self
+                                .data
+                                .categories()
+                                .iter()
+                                .any(|category| category_matches(Some(category), cat))
+                            {
                                 self.category_filter = None;
                                 self.category_index = 0;
                             }
@@ -634,7 +805,12 @@ impl App {
                 self.input.clear();
                 if let Mode::Editing { edit_id: None } = &self.mode {
                     if let Some(ref cat) = self.category_filter {
-                        if !self.data.categories().contains(cat) {
+                        if !self
+                            .data
+                            .categories()
+                            .iter()
+                            .any(|category| category_matches(Some(category), cat))
+                        {
                             self.category_filter = None;
                             self.category_index = 0;
                         }
@@ -807,6 +983,60 @@ impl App {
                     }
                 }
             }
+            Action::SelectAllMultiSelect => {
+                let Mode::MultiSelect { cmd, .. } = &self.mode else {
+                    return false;
+                };
+                if *cmd != MultiSelectCmd::Delete {
+                    return false;
+                }
+
+                let (ids, category_name) = if self.pane == Pane::Categories {
+                    if self.category_index == 0 {
+                        (self.data.items().iter().map(|item| item.id).collect(), None)
+                    } else if let Some(entry) =
+                        self.data.category_entries().get(self.category_index - 1)
+                    {
+                        let category = entry.path.clone();
+                        let ids = self
+                            .data
+                            .items()
+                            .iter()
+                            .filter(|item| category_matches(item.category.as_deref(), &category))
+                            .map(|item| item.id)
+                            .collect();
+                        (ids, Some(category))
+                    } else {
+                        (Vec::new(), None)
+                    }
+                } else {
+                    let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+                    let category_name = self.category_filter.as_ref().and_then(|category| {
+                        let visible: HashSet<u64> = ids.iter().copied().collect();
+                        let branch: HashSet<u64> = self
+                            .data
+                            .items()
+                            .iter()
+                            .filter(|item| category_matches(item.category.as_deref(), category))
+                            .map(|item| item.id)
+                            .collect();
+                        (visible == branch).then(|| category.clone())
+                    });
+                    (ids, category_name)
+                };
+
+                let texts: Vec<String> = ids
+                    .iter()
+                    .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
+                    .collect();
+                if !ids.is_empty() {
+                    self.mode = Mode::ConfirmDelete {
+                        ids,
+                        texts,
+                        category_name,
+                    };
+                }
+            }
             Action::ConfirmMultiSelect => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 if let Mode::MultiSelect {
@@ -827,7 +1057,7 @@ impl App {
                                     .data
                                     .items()
                                     .iter()
-                                    .filter(|i| i.category.as_deref() == Some(category.as_str()))
+                                    .filter(|i| category_matches(i.category.as_deref(), category))
                                     .map(|i| i.id)
                                     .collect();
                                 for id in ids {
@@ -847,7 +1077,12 @@ impl App {
                         }
                     }
                     if let Some(ref cat) = self.category_filter {
-                        if !self.data.categories().contains(cat) {
+                        if !self
+                            .data
+                            .categories()
+                            .iter()
+                            .any(|category| category_matches(Some(category), cat))
+                        {
                             self.category_filter = None;
                             self.category_index = 0;
                         }
@@ -888,7 +1123,12 @@ impl App {
                     self.mark_dirty();
                 }
                 if let Some(ref cat) = self.category_filter {
-                    if !self.data.categories().contains(cat) {
+                    if !self
+                        .data
+                        .categories()
+                        .iter()
+                        .any(|category| category_matches(Some(category), cat))
+                    {
                         self.category_filter = None;
                         self.category_index = 0;
                     }
@@ -1066,6 +1306,9 @@ impl App {
                     *prompt_focused = !*prompt_focused;
                 }
             }
+            Action::SwitchCategoryFilter(direction, parent_only) => {
+                self.switch_category_filter(direction, parent_only);
+            }
             Action::SwitchPane => {
                 self.pane = match self.pane {
                     Pane::Items => Pane::Categories,
@@ -1095,8 +1338,8 @@ impl App {
                     if idx == 0 {
                         self.category_filter = None;
                         self.category_index = 0;
-                    } else if let Some(cat) = cats.get(idx - 1) {
-                        self.category_filter = Some(cat.clone());
+                    } else if let Some(cat) = self.data.category_entries().get(idx - 1) {
+                        self.category_filter = Some(cat.path.clone());
                         self.category_index = idx;
                     }
                     self.pane = Pane::Items;
@@ -1105,33 +1348,31 @@ impl App {
                 }
             }
             Action::AddCategory(name) => {
-                if !name.is_empty() {
-                    self.data.add_category(&name);
-                    self.mark_dirty();
-                    let cats = self.data.categories();
-                    if let Some(pos) = cats.iter().position(|c| c == &name) {
-                        self.category_index = pos + 1;
-                    }
-                    self.category_filter = Some(name);
-                    self.pane = Pane::Categories;
-                    self.clamp_selection();
+                if normalize_category(&name).is_some() {
+                    self.input.clear();
+                    self.mode = Mode::CategoryCreateChoice {
+                        selected: 0,
+                        parent: self.current_category_parent(),
+                        name,
+                    };
+                } else {
+                    self.input.clear();
+                    self.mode = Mode::Normal;
                 }
-                self.input.clear();
-                self.mode = Mode::Normal;
             }
             Action::DeleteCategory(name) => {
                 let ids: Vec<u64> = self
                     .data
                     .items()
                     .iter()
-                    .filter(|i| i.category.as_deref() == Some(&name))
+                    .filter(|i| category_matches(i.category.as_deref(), &name))
                     .map(|i| i.id)
                     .collect();
                 let texts: Vec<String> = self
                     .data
                     .items()
                     .iter()
-                    .filter(|i| i.category.as_deref() == Some(&name))
+                    .filter(|i| category_matches(i.category.as_deref(), &name))
                     .map(|i| i.text.clone())
                     .collect();
                 self.mode = Mode::ConfirmDelete {
@@ -1143,25 +1384,91 @@ impl App {
             Action::CancelCategoryPicker => {
                 self.mode = Mode::Normal;
             }
-            Action::StartCategoryAdd => {
-                self.input.clear();
-                self.mode = Mode::CategoryAdd;
+            Action::AddCategoryChoice(choice) => {
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                if let Mode::CategoryCreateChoice {
+                    selected,
+                    parent,
+                    name,
+                } = mode
+                {
+                    let choice = if choice == usize::MAX {
+                        selected
+                    } else {
+                        choice
+                    };
+                    match (choice, parent) {
+                        (0, Some(parent)) => {
+                            if let Some(name) = Self::category_from_input(Some(&parent), &name) {
+                                self.finish_add_category(name);
+                            } else {
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                        (0, None) => {
+                            let roots = self.root_categories();
+                            if roots.is_empty() {
+                                if let Some(name) = Self::category_from_input(None, &name) {
+                                    self.finish_add_category(name);
+                                } else {
+                                    self.mode = Mode::Normal;
+                                }
+                            } else {
+                                self.mode = Mode::CategoryParentPicker { selected: 0, name };
+                            }
+                        }
+                        _ => {
+                            if let Some(name) = Self::category_from_input(None, &name) {
+                                self.finish_add_category(name);
+                            } else {
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                    }
+                }
+            }
+            Action::SelectCategoryParent(idx) => {
+                let roots = self.root_categories();
+                let (idx, name) = if idx == usize::MAX {
+                    match &self.mode {
+                        Mode::CategoryParentPicker { selected, name } => (*selected, name.clone()),
+                        _ => (idx, String::new()),
+                    }
+                } else {
+                    let name = match &self.mode {
+                        Mode::CategoryParentPicker { name, .. } => name.clone(),
+                        _ => String::new(),
+                    };
+                    (idx, name)
+                };
+                if let Some(parent) = roots.get(idx) {
+                    if let Some(name) = Self::category_from_input(Some(parent), &name) {
+                        self.finish_add_category(name);
+                    } else {
+                        self.mode = Mode::Normal;
+                    }
+                } else {
+                    self.mode = Mode::Normal;
+                }
             }
             Action::CreateAndAssignCategory(name) => {
                 let items = self.items();
                 let id = items.get(self.selected_index()).map(|i| i.id);
+                let Some(name) = normalize_category(&name) else {
+                    self.input.clear();
+                    self.mode = Mode::Normal;
+                    return false;
+                };
                 if let Some(id) = id {
                     self.data.set_category(id, Some(name.clone()));
                     self.mark_dirty();
                 }
-                if !name.is_empty() {
-                    self.category_filter = Some(name.clone());
-                    let cats = self.data.categories();
-                    if let Some(pos) = cats.iter().position(|c| c == &name) {
-                        self.category_index = pos + 1;
-                    } else {
-                        self.category_index = cats.len() + 1;
-                    }
+                self.category_filter = Some(name.clone());
+                let cats = self.data.category_entries();
+                if let Some(pos) = cats.iter().position(|c| c.path == name) {
+                    self.category_index = pos + 1;
+                } else {
+                    self.category_index = cats.len() + 1;
                 }
                 self.input.clear();
                 self.mode = Mode::Normal;
@@ -1183,7 +1490,7 @@ impl App {
             Action::StartCategoryAddWithChar(c) => {
                 self.input.clear();
                 self.input.insert_char(c);
-                self.mode = Mode::CategoryAdd;
+                self.mode = Mode::CategoryAdd { parent: None };
             }
             Action::CancelCategoryAdd => {
                 self.input.clear();
@@ -1246,4 +1553,25 @@ fn get_completions(prefix: &str) -> Vec<String> {
     matches.sort();
     matches.dedup();
     matches.into_iter().map(|s| s.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+
+    #[test]
+    fn category_from_input_attaches_child_to_parent() {
+        assert_eq!(
+            App::category_from_input(Some("Work"), "work2"),
+            Some("Work/work2".to_string())
+        );
+    }
+
+    #[test]
+    fn category_from_input_keeps_manual_path() {
+        assert_eq!(
+            App::category_from_input(Some("Work"), "Personal/p1"),
+            Some("Personal/p1".to_string())
+        );
+    }
 }

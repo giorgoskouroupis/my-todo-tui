@@ -2,26 +2,45 @@
 
 A keyboard-driven terminal todo app built with Ratatui and crossterm.
 
-## Build
+## Build On Debian/Ubuntu
 
 ```sh
-cargo build
-cargo run
+sudo apt update
+sudo apt install -y cargo rustc
+
 cargo test
+cargo build --release
+./target/release/todo-tui
 ```
 
-With Nix:
+To install into your user-local prefix:
 
 ```sh
-nix develop --command cargo build
-nix develop --command cargo run
+cargo install --path . --root ~/.local
+~/.local/bin/todo-tui
+```
+
+To build a Debian package:
+
+```sh
+sudo apt install -y dpkg-dev
+cargo install cargo-deb
+cargo deb
+# sudo apt install ./target/debian/todo-tui_*.deb
+```
+
+## Build With Nix/NixOS
+
+```sh
 nix develop --command cargo test
+nix develop --command cargo build --release
+nix develop --command cargo run
 ```
 
-## Install
+To install with Cargo from inside the dev shell:
 
 ```sh
-cargo install --path .
+nix develop --command cargo install --path . --root ~/.local
 todo-tui
 ```
 
@@ -40,14 +59,18 @@ todo-tui
 | `*` | Toggle pin |
 | `s` | Sort picker |
 | `Left` / `Right` | Switch between items and category sidebar |
+| `PageUp` / `PageDown` | Switch category filter from either pane |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | Switch only top-level category filters |
 | `Ctrl+K` | Assign category |
 | `Ctrl+D` | Open due-date calendar |
 | `/` | Command mode |
 | `Ctrl+C` | Quit |
 
-Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`. `/delete` bulk-selects items from the items pane and categories from the category sidebar.
+Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`. `/delete` bulk-selects items from the items pane and categories from the category sidebar; `Ctrl+A` opens a confirmation popup for all current delete targets and removes the category branch when the target is a whole category.
 
-Due-date calendar keys: `Tab` switches focus between the calendar and the bottom date prompt. In calendar focus, arrows move by day/week, `PageUp`/`PageDown` change month, `t` jumps to today, and `Delete` clears. In prompt focus, type digits or `-` to edit `YYYY-MM-DD`, and arrows move the cursor. `Enter` saves a valid date and `Esc` cancels.
+Categories can be flat (`Dog`) or nested with `/` (`Work/work2`). The sidebar groups nested categories under their parent with an `all` row. In the sidebar, type a category name directly and press `Enter`; the placement popup then asks whether to attach under the highlighted category or create at root. From `All`, attach opens a parent picker. Manual `Parent/child` entry still works as a shortcut. Global `All` shows full badges like `[Work|work2]`; a parent filter like `Work` shows shorter child badges like `[work2]`.
+
+Due-date calendar keys: `Tab` switches focus between the calendar and the bottom date prompt. The popup opens near the selected item from Normal mode and near the input bar from editing/new-item flows; the rest of the UI is muted while the active calendar or prompt stays highlighted. In calendar focus, arrows move by day/week, `PageUp`/`PageDown` change month, `t` jumps to today, and `Delete` clears. In prompt focus, type digits or `-` to edit `YYYY-MM-DD`, and arrows move the cursor. `Enter` saves a valid date and `Esc` cancels. Due dates render muted by default, yellow within 10 days, and red within 3 days or overdue.
 
 ## Storage
 

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::Action;
-use crate::data::{TodoData, TodoItem};
+use crate::data::{CategoryEntry, TodoItem};
 
 fn handle_text_input_key(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) -> bool {
     match key.code {
@@ -185,6 +185,9 @@ pub fn handle_multiselect(
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::SelectAllMultiSelect)
+        }
         KeyCode::Char(' ') if selected_id.is_some() => {
             Some(Action::ToggleMultiSelect(selected_id.unwrap()))
         }
@@ -199,13 +202,14 @@ pub fn handle_multiselect(
 
 pub fn handle_category_multiselect(
     key: KeyEvent,
-    data: &TodoData,
+    categories: &[CategoryEntry],
     category_index: usize,
 ) -> Option<Action> {
     let selected_category = || {
-        let cats = data.categories();
-        if category_index > 0 && category_index <= cats.len() {
-            cats.get(category_index - 1).cloned()
+        if category_index > 0 && category_index <= categories.len() {
+            categories
+                .get(category_index - 1)
+                .map(|entry| entry.path.clone())
         } else {
             None
         }
@@ -214,6 +218,9 @@ pub fn handle_category_multiselect(
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::SelectAllMultiSelect)
+        }
         KeyCode::Char(' ') | KeyCode::Char('x') => {
             selected_category().map(Action::ToggleCategoryMultiSelect)
         }
@@ -271,24 +278,24 @@ pub fn handle_priority_picker(key: KeyEvent) -> Option<Action> {
     }
 }
 
-pub fn handle_sidebar(key: KeyEvent, data: &TodoData, category_index: usize) -> Option<Action> {
+pub fn handle_sidebar(
+    key: KeyEvent,
+    categories: &[CategoryEntry],
+    category_index: usize,
+) -> Option<Action> {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
         KeyCode::Enter => {
-            let cats = data.categories();
-            let cats = cats.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            if category_index == 0 || category_index <= cats.len() {
+            if category_index == 0 || category_index <= categories.len() {
                 Some(Action::CategorySelect(category_index))
             } else {
                 Some(Action::CategorySelect(0))
             }
         }
-        KeyCode::Char('a') => Some(Action::StartCategoryAdd),
         KeyCode::Delete => {
-            let cats = data.categories();
-            if category_index > 0 && category_index <= cats.len() {
-                let name = cats[category_index - 1].clone();
+            if category_index > 0 && category_index <= categories.len() {
+                let name = categories[category_index - 1].path.clone();
                 Some(Action::DeleteCategory(name))
             } else {
                 None
@@ -313,6 +320,28 @@ pub fn handle_category_picker(key: KeyEvent) -> Option<Action> {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelCategoryPicker),
+        _ => None,
+    }
+}
+
+pub fn handle_category_create_choice(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Char('1') => Some(Action::AddCategoryChoice(0)),
+        KeyCode::Char('2') => Some(Action::AddCategoryChoice(1)),
+        KeyCode::Enter => Some(Action::AddCategoryChoice(usize::MAX)),
+        KeyCode::Esc => Some(Action::CancelCategoryAdd),
+        _ => None,
+    }
+}
+
+pub fn handle_category_parent_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Enter => Some(Action::SelectCategoryParent(usize::MAX)),
+        KeyCode::Esc => Some(Action::CancelCategoryAdd),
         _ => None,
     }
 }

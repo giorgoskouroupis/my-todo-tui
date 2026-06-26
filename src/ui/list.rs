@@ -2,7 +2,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::ListItem;
 
-use crate::data::{Priority, TodoItem};
+use crate::data::{category_badge, Priority, TodoItem};
 use crate::date;
 
 use super::theme::Theme;
@@ -13,6 +13,15 @@ fn priority_color(p: Priority, theme: &Theme) -> ratatui::style::Color {
         Priority::Normal => theme.accent,
         Priority::High => theme.warning,
         Priority::Urgent => theme.error,
+    }
+}
+
+fn due_date_color(due_date: &str, theme: &Theme) -> ratatui::style::Color {
+    match date::days_until(due_date) {
+        Some(days) if days <= 3 => theme.error,
+        Some(days) if days <= 10 => theme.warning,
+        Some(_) => theme.text_muted,
+        None => theme.text_muted,
     }
 }
 
@@ -53,7 +62,7 @@ pub fn render_item(
     theme: &Theme,
     text_width: usize,
     filter: &str,
-    hide_category_badge: bool,
+    category_filter: Option<&str>,
 ) -> ListItem<'static> {
     let base_bg = if selected {
         theme.bg_tertiary
@@ -92,13 +101,12 @@ pub fn render_item(
     if item.done {
         line1.push(Span::styled("\u{2713}", Style::default().fg(theme.success)));
     } else {
-        let circle = if item.doing { "\u{25cf}" } else { "\u{25cb}" };
-        let circle_color = if item.doing {
+        let marker_color = if item.doing {
             theme.accent
         } else {
             theme.text_primary
         };
-        line1.push(Span::styled(circle, Style::default().fg(circle_color)));
+        line1.push(Span::styled("-", Style::default().fg(marker_color)));
     }
     line1.push(Span::raw(" "));
     line1.push(Span::styled(diamond, Style::default().fg(diamond_color)));
@@ -106,11 +114,7 @@ pub fn render_item(
         line1.push(Span::raw(" \u{1F4CC}"));
     }
     if let Some(ref date) = item.due_date {
-        let date_color = if is_overdue_item {
-            theme.error
-        } else {
-            theme.warning
-        };
+        let date_color = due_date_color(date, theme);
         line1.push(Span::raw(" \u{1F4C5} "));
         line1.push(Span::styled(date.clone(), Style::default().fg(date_color)));
     }
@@ -123,10 +127,10 @@ pub fn render_item(
         if i == 0 {
             spans.extend(highlight_matches(seg, filter, title_style, match_style));
             if let Some(ref cat) = item.category {
-                if !hide_category_badge {
+                if let Some(badge) = category_badge(cat, category_filter) {
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(
-                        format!("[{}]", cat),
+                        format!("[{}]", badge),
                         Style::default().fg(theme.text_muted),
                     ));
                 }
@@ -137,9 +141,6 @@ pub fn render_item(
         }
         lines.push(Line::from(spans));
     }
-
-    // Line last: empty
-    lines.push(Line::from(Span::raw("")));
 
     ListItem::new(Text::from(lines)).style(Style::default().bg(base_bg))
 }

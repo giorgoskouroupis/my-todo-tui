@@ -141,6 +141,11 @@ pub fn is_overdue(due_date: &str) -> bool {
     Date::parse(due_date).is_some_and(|date| date <= Date::today())
 }
 
+pub fn days_until(due_date: &str) -> Option<i64> {
+    let date = Date::parse(due_date)?;
+    Some(date.days_since_epoch() - Date::today().days_since_epoch())
+}
+
 fn days_since_epoch() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -163,7 +168,7 @@ fn is_leap_year(year: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{days_in_month, Date};
+    use super::{days_in_month, days_until, Date};
 
     #[test]
     fn parses_valid_iso_dates() {
@@ -201,5 +206,13 @@ mod tests {
     fn clamps_day_when_moving_months() {
         let date = Date::parse("2026-01-31").unwrap();
         assert_eq!(date.add_months(1).iso(), "2026-02-28");
+    }
+
+    #[test]
+    fn reports_days_until_date() {
+        let today = Date::today();
+        assert_eq!(days_until(&today.iso()), Some(0));
+        assert_eq!(days_until(&today.add_days(3).iso()), Some(3));
+        assert_eq!(days_until(&today.add_days(-1).iso()), Some(-1));
     }
 }

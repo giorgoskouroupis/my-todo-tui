@@ -6,7 +6,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListState, Paragraph};
 
 use crate::app::{get_filtered_commands, Mode, Pane, SortMode};
-use crate::data::{Priority, TodoItem};
+use crate::data::{CategoryEntry, Priority, TodoItem};
 use crate::date::{self, Date};
 
 use self::input::InputBuffer;
@@ -23,12 +23,20 @@ pub struct RenderState<'a> {
     pub pane: &'a Pane,
     pub category_index: usize,
     pub categories: &'a [String],
+    pub category_entries: &'a [CategoryEntry],
     pub theme: &'a Theme,
     pub sort_mode: &'a SortMode,
 }
 
 pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     let area = frame.area();
+    let dim_theme;
+    let base_theme = if matches!(state.mode, Mode::DueDateCalendar { .. }) {
+        dim_theme = dimmed_theme(state.theme);
+        &dim_theme
+    } else {
+        state.theme
+    };
     let layout = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
@@ -36,7 +44,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     ])
     .split(area);
 
-    render_header(frame, layout[0], &state);
+    render_header(frame, layout[0], &state, base_theme);
 
     let mid = layout[1];
     let h_layout = Layout::horizontal([Constraint::Length(22), Constraint::Min(1)]).split(mid);
@@ -47,10 +55,10 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         state.mode,
         state.pane,
         state.category_index,
-        state.categories,
-        state.theme,
+        state.category_entries,
+        base_theme,
     );
-    render_list(frame, h_layout[1], &state);
+    render_list(frame, h_layout[1], &state, base_theme);
     render_input(
         frame,
         layout[2],
@@ -58,7 +66,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         state.mode,
         state.filter,
         state.pane,
-        state.theme,
+        base_theme,
     );
 
     let popup_area = mid;
@@ -70,6 +78,29 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         render_priority_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::CategoryPicker { selected } = state.mode {
         render_category_picker(frame, popup_area, *selected, state.categories, state.theme);
+    } else if let Mode::CategoryCreateChoice {
+        selected,
+        parent,
+        name,
+    } = state.mode
+    {
+        render_category_create_choice(
+            frame,
+            popup_area,
+            *selected,
+            parent.as_deref(),
+            name,
+            state.theme,
+        );
+    } else if let Mode::CategoryParentPicker { selected, name } = state.mode {
+        render_category_parent_picker(
+            frame,
+            popup_area,
+            *selected,
+            name,
+            state.categories,
+            state.theme,
+        );
     } else if let Mode::SortPicker { selected } = state.mode {
         render_sort_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::Help = state.mode {
@@ -81,20 +112,86 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     } else if let Mode::DueDateCalendar {
         selected,
         prompt_focused,
+        from_normal,
         ..
     } = state.mode
     {
-        render_calendar_popup(frame, popup_area, *selected, *prompt_focused, state.theme);
+        if *prompt_focused {
+            render_input(
+                frame,
+                layout[2],
+                state.input,
+                state.mode,
+                state.filter,
+                state.pane,
+                state.theme,
+            );
+        }
+        let anchor = if *from_normal {
+            calendar_item_anchor(h_layout[1], state.items, state.selected_index)
+        } else {
+            calendar_prompt_anchor(layout[2])
+        };
+        render_calendar_popup(
+            frame,
+            popup_area,
+            anchor,
+            *selected,
+            *prompt_focused,
+            state.theme,
+        );
     }
 }
 
-fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
+fn dimmed_theme(theme: &Theme) -> Theme {
+    let mut dimmed = theme.clone();
+    dimmed.accent = theme.text_muted;
+    dimmed.success = theme.text_muted;
+    dimmed.warning = theme.text_muted;
+    dimmed.error = theme.text_muted;
+    dimmed.text_primary = theme.text_muted;
+    dimmed.text_secondary = theme.text_muted;
+    dimmed.border_default = theme.text_muted;
+    dimmed.bg_tertiary = theme.bg_secondary;
+    dimmed.accent_selection = theme.bg_secondary;
+    dimmed
+}
+
+fn calendar_prompt_anchor(input_area: Rect) -> Rect {
+    Rect::new(
+        input_area.x,
+        input_area.y,
+        input_area.width,
+        input_area.height,
+    )
+}
+
+fn calendar_item_anchor(list_area: Rect, items: &[TodoItem], selected_index: usize) -> Rect {
+    let content_width = list_area.width.saturating_sub(7) as usize;
+    let mut y = list_area.y;
+    for item in items.iter().take(selected_index) {
+        let text_lines = wrap_text(&item.text, content_width.max(10)).len() as u16;
+        y = y.saturating_add(1 + text_lines);
+        if y >= list_area.bottom().saturating_sub(1) {
+            break;
+        }
+    }
+
+    Rect::new(
+        list_area.x.saturating_add(1),
+        y.min(list_area.bottom().saturating_sub(1)),
+        list_area.width.saturating_sub(2),
+        1,
+    )
+}
+
+fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: &Theme) {
     let mut spans = vec![
         Span::raw(" "),
         Span::styled(
             "TODO",
             Style::default()
-                .fg(state.theme.accent)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -103,7 +200,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("[search: {}]", state.filter),
-            Style::default().fg(state.theme.warning),
+            Style::default().fg(theme.warning),
         ));
     }
 
@@ -111,16 +208,16 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("[filter: {:?}]", p).to_lowercase(),
-            Style::default().fg(state.theme.warning),
+            Style::default().fg(theme.warning),
         ));
     }
 
     if state.category_index > 0 {
-        if let Some(cat) = state.categories.get(state.category_index - 1) {
+        if let Some(cat) = state.category_entries.get(state.category_index - 1) {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
-                format!("[cat: {}]", cat),
-                Style::default().fg(state.theme.warning),
+                format!("[cat: {}]", cat.path),
+                Style::default().fg(theme.warning),
             ));
         }
     }
@@ -130,14 +227,14 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 "[sort: priority]",
-                Style::default().fg(state.theme.warning),
+                Style::default().fg(theme.warning),
             ));
         }
         SortMode::DueDate => {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 "[sort: due]",
-                Style::default().fg(state.theme.warning),
+                Style::default().fg(theme.warning),
             ));
         }
         _ => {}
@@ -146,21 +243,21 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
     spans.push(Span::raw("  "));
     spans.push(Span::styled(
         format!("{} pending", state.pending_count),
-        Style::default().fg(state.theme.text_secondary),
+        Style::default().fg(theme.text_secondary),
     ));
 
     if !state.items.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{}/{}", state.selected_index + 1, state.items.len()),
-            Style::default().fg(state.theme.text_muted),
+            Style::default().fg(theme.text_muted),
         ));
     }
 
     let line = Line::from(spans);
 
     let paragraph = Paragraph::new(line)
-        .style(Style::default().bg(state.theme.bg_primary))
+        .style(Style::default().bg(theme.bg_primary))
         .alignment(Alignment::Left);
     frame.render_widget(paragraph, area);
 }
@@ -171,7 +268,7 @@ fn render_sidebar(
     mode: &Mode,
     pane: &Pane,
     category_index: usize,
-    categories: &[String],
+    categories: &[CategoryEntry],
     theme: &Theme,
 ) {
     let selected_categories = match mode {
@@ -209,12 +306,21 @@ fn render_sidebar(
             theme.bg_primary
         })),
     );
+    let separator = "\u{2500}".repeat(content_width.saturating_sub(1));
+    lines.push(
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(separator, Style::default().fg(theme.text_muted)),
+        ])
+        .style(Style::default().bg(theme.bg_primary)),
+    );
 
     for (i, cat) in categories.iter().enumerate() {
         let idx = i + 1;
         let hl = is_active && category_index == idx;
         let is_filter = !is_active && category_index == idx;
-        let multi_selected = selected_categories.is_some_and(|selected| selected.contains(cat));
+        let multi_selected =
+            selected_categories.is_some_and(|selected| selected.contains(&cat.path));
         let bg = if hl || is_filter {
             theme.bg_tertiary
         } else if multi_selected {
@@ -236,15 +342,22 @@ fn render_sidebar(
             Style::default().fg(theme.accent),
         );
 
-        let wrapped = wrap_text(cat, name_width);
+        let prefix = if cat.depth == 0 { "" } else { "  " };
+        let label_style = if cat.is_all {
+            style.fg(theme.text_muted)
+        } else {
+            style
+        };
+        let wrapped = wrap_text(&cat.label, name_width.saturating_sub(cat.depth * 2));
         for (j, seg) in wrapped.iter().enumerate() {
             let mut spans = vec![Span::raw(" ")];
             if j == 0 {
                 spans.push(bullet.clone());
-                spans.push(Span::styled(seg.clone(), style));
+                spans.push(Span::raw(prefix));
+                spans.push(Span::styled(seg.clone(), label_style));
             } else {
-                spans.push(Span::raw("    "));
-                spans.push(Span::styled(seg.clone(), style));
+                spans.push(Span::raw(if cat.depth == 0 { "   " } else { "     " }));
+                spans.push(Span::styled(seg.clone(), label_style));
             }
             lines.push(Line::from(spans).style(Style::default().bg(bg)));
         }
@@ -272,7 +385,7 @@ fn render_sidebar(
     frame.render_widget(list, area);
 }
 
-fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
+fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: &Theme) {
     let selected_ids = match state.mode {
         Mode::MultiSelect { ref selected, .. } => Some(selected),
         _ => None,
@@ -280,7 +393,11 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
 
     let is_active = *state.pane == Pane::Items;
     let text_width = area.width.saturating_sub(7) as usize;
-    let hide_category_badge = state.category_index > 0;
+    let category_filter = state
+        .category_index
+        .checked_sub(1)
+        .and_then(|idx| state.category_entries.get(idx))
+        .map(|entry| entry.path.as_str());
 
     let list_items: Vec<_> = state
         .items
@@ -292,10 +409,10 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
                 item,
                 is_active && i == state.selected_index,
                 multi_sel,
-                state.theme,
+                theme,
                 text_width,
                 state.filter,
-                hide_category_badge,
+                category_filter,
             )
         })
         .collect();
@@ -309,22 +426,22 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(if is_active {
-            state.theme.accent
+            theme.accent
         } else {
-            state.theme.border_default
+            theme.border_default
         }))
         .title(" Items ")
         .title_style(
             Style::default()
-                .fg(state.theme.accent)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(state.theme.bg_primary));
+        .style(Style::default().bg(theme.bg_primary));
 
     let list = List::new(list_items)
         .block(block)
-        .style(Style::default().bg(state.theme.bg_primary))
-        .highlight_style(Style::default().bg(state.theme.bg_tertiary));
+        .style(Style::default().bg(theme.bg_primary))
+        .highlight_style(Style::default().bg(theme.bg_tertiary));
 
     frame.render_stateful_widget(list, area, &mut list_state);
 }
@@ -617,6 +734,167 @@ fn render_category_picker(
     frame.render_widget(paragraph, popup_area);
 }
 
+fn render_category_create_choice(
+    frame: &mut Frame,
+    area: Rect,
+    selected: usize,
+    parent: Option<&str>,
+    name: &str,
+    theme: &Theme,
+) {
+    let first = match parent {
+        Some(parent) => format!("Attach to {parent}"),
+        None => "Attach to existing category".to_string(),
+    };
+    let items = [first, "Create at root".to_string()];
+    let height = items.len() as u16 + 3;
+    let width = items
+        .iter()
+        .map(|item| item.len() as u16)
+        .max()
+        .unwrap_or(24)
+        .saturating_add(8)
+        .max(32);
+    let popup_y = area.bottom().saturating_sub(height + 1);
+    let popup_x = area.x + 2;
+    let popup_area = Rect::new(
+        popup_x,
+        popup_y.min(area.bottom().saturating_sub(height)),
+        width,
+        height,
+    );
+
+    let mut lines = vec![Line::from(vec![
+        Span::raw("  "),
+        Span::styled(name.to_string(), Style::default().fg(theme.text_secondary)),
+    ])
+    .style(Style::default().bg(theme.bg_primary))];
+    lines.extend(items.iter().enumerate().map(|(i, label)| {
+        let is_highlighted = i == selected.min(items.len().saturating_sub(1));
+        let bg = if is_highlighted {
+            theme.bg_tertiary
+        } else {
+            theme.bg_primary
+        };
+        Line::from(vec![
+            Span::styled(format!("  {}. ", i + 1), Style::default().fg(theme.accent)),
+            Span::styled(
+                label.clone(),
+                Style::default()
+                    .fg(theme.text_primary)
+                    .add_modifier(if is_highlighted {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ])
+        .style(Style::default().bg(bg))
+    }));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_default))
+        .title(" New Category ")
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg_primary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_primary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+fn render_category_parent_picker(
+    frame: &mut Frame,
+    area: Rect,
+    selected: usize,
+    name: &str,
+    categories: &[String],
+    theme: &Theme,
+) {
+    let mut roots: Vec<&str> = categories
+        .iter()
+        .filter_map(|cat| cat.split('/').next())
+        .filter(|root| !root.is_empty())
+        .collect();
+    roots.sort_unstable();
+    roots.dedup();
+    if roots.is_empty() {
+        return;
+    }
+
+    let height = roots.len().min(10) as u16 + 2;
+    let width = roots
+        .iter()
+        .map(|root| root.len() as u16)
+        .max()
+        .unwrap_or(20)
+        .saturating_add(4)
+        .max(28);
+    let popup_y = area.bottom().saturating_sub(height + 1);
+    let popup_x = area.x + 2;
+    let popup_area = Rect::new(
+        popup_x,
+        popup_y.min(area.bottom().saturating_sub(height)),
+        width,
+        height,
+    );
+
+    let safe_selected = selected.min(roots.len().saturating_sub(1));
+    let lines: Vec<Line<'static>> = roots
+        .iter()
+        .take(10)
+        .enumerate()
+        .map(|(i, root)| {
+            let is_highlighted = i == safe_selected;
+            let bg = if is_highlighted {
+                theme.bg_tertiary
+            } else {
+                theme.bg_primary
+            };
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    root.to_string(),
+                    Style::default()
+                        .fg(theme.text_primary)
+                        .add_modifier(if is_highlighted {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+            ])
+            .style(Style::default().bg(bg))
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_default))
+        .title(format!(" Attach {name} Under "))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg_primary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().bg(theme.bg_primary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
 fn render_sort_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
     let items: [(&str, SortMode); 3] = [
         ("Priority", SortMode::Priority),
@@ -825,6 +1103,8 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("*", "Toggle pin", false),
         ("s", "Sort picker", false),
         ("←/→", "Switch pane", false),
+        ("PgUp/PgDn", "Switch category", false),
+        ("Ctrl+Pg", "Top categories", false),
         ("Ctrl+K", "Assign category", false),
         ("/", "Command mode", false),
         ("Ctrl+C", "Quit (from any mode)", false),
@@ -832,9 +1112,10 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Sidebar", "", true),
         ("j/k or ↑/↓", "Navigate", false),
         ("Enter", "Select/filter category", false),
-        ("a", "Add category", false),
+        ("type", "Start category", false),
         ("Delete", "Delete category", false),
         ("/delete", "Bulk-select categories", false),
+        ("Ctrl+A", "Delete all targets", false),
         ("", "", false),
         ("Editing", "", true),
         ("Enter", "Submit", false),
@@ -1032,14 +1313,15 @@ pub(super) fn wrap_text(s: &str, max_width: usize) -> Vec<String> {
 fn render_calendar_popup(
     frame: &mut Frame,
     area: Rect,
+    anchor: Rect,
     selected: Date,
     prompt_focused: bool,
     theme: &Theme,
 ) {
     let width = 40;
     let height = 13;
-    let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
-    let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup_x = calendar_popup_x(area, anchor, width);
+    let popup_y = calendar_popup_y(area, anchor, height, prompt_focused);
     let popup_area = Rect::new(popup_x, popup_y, width, height);
 
     let today = Date::today();
@@ -1155,6 +1437,37 @@ fn render_calendar_popup(
     frame.render_widget(paragraph, popup_area);
 }
 
+fn calendar_popup_x(area: Rect, anchor: Rect, width: u16) -> u16 {
+    let centered = anchor
+        .x
+        .saturating_add(anchor.width / 2)
+        .saturating_sub(width / 2);
+    let min = area.x;
+    let max = area.right().saturating_sub(width);
+    centered.clamp(min, max.max(min))
+}
+
+fn calendar_popup_y(area: Rect, anchor: Rect, height: u16, prefer_above: bool) -> u16 {
+    let below = anchor.bottom().saturating_add(1);
+    let above = anchor.y.saturating_sub(height.saturating_add(1));
+    let min = area.y;
+    let max = area.bottom().saturating_sub(height);
+
+    let y = if prefer_above {
+        if anchor.y.saturating_sub(area.y) > height {
+            above
+        } else {
+            below
+        }
+    } else if area.bottom().saturating_sub(anchor.bottom()) > height {
+        below
+    } else {
+        above
+    };
+
+    y.clamp(min, max.max(min))
+}
+
 fn render_calendar_date_field(
     text: &str,
     cursor: usize,
@@ -1228,7 +1541,11 @@ fn render_input(
 
             (Line::from(spans), None)
         }
-        Mode::MultiSelect { cmd, .. } => {
+        Mode::MultiSelect {
+            cmd,
+            selected,
+            selected_categories,
+        } => {
             let target = if matches!(pane, Pane::Categories)
                 && matches!(cmd, crate::app::MultiSelectCmd::Delete)
             {
@@ -1236,8 +1553,28 @@ fn render_input(
             } else {
                 "items"
             };
+            let action = match cmd {
+                crate::app::MultiSelectCmd::Delete => "Bulk delete",
+                crate::app::MultiSelectCmd::ToggleDone => "Bulk done",
+            };
+            let counts = if selected_categories.is_empty() {
+                format!("{} items", selected.len())
+            } else {
+                format!(
+                    "{} items, {} categories",
+                    selected.len(),
+                    selected_categories.len()
+                )
+            };
+            let select_all = if matches!(cmd, crate::app::MultiSelectCmd::Delete) {
+                " Ctrl+A all,"
+            } else {
+                ""
+            };
             let line = Line::from(vec![Span::styled(
-                format!("  [select {target}, Enter to confirm, Esc to cancel]"),
+                format!(
+                    "  [{action}: {counts} selected | select {target},{select_all} Enter apply, Esc cancel]"
+                ),
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
@@ -1277,10 +1614,28 @@ fn render_input(
             )]);
             (line, None)
         }
-        Mode::CategoryAdd => {
+        Mode::CategoryCreateChoice { .. } => {
+            let line = Line::from(vec![Span::styled(
+                "  [1/2 choose, Enter select, Esc cancel]",
+                Style::default().fg(theme.warning),
+            )]);
+            (line, None)
+        }
+        Mode::CategoryParentPicker { .. } => {
+            let line = Line::from(vec![Span::styled(
+                "  [choose parent, Enter select, Esc cancel]",
+                Style::default().fg(theme.warning),
+            )]);
+            (line, None)
+        }
+        Mode::CategoryAdd { parent } => {
             let text = input.text();
+            let label = match parent {
+                Some(parent) => format!("  New subcategory under {parent}: "),
+                None => "  New category: ".to_string(),
+            };
             let line = Line::from(vec![
-                Span::styled("  Category: ", Style::default().fg(theme.accent)),
+                Span::styled(label, Style::default().fg(theme.accent)),
                 Span::styled(
                     if text.is_empty() { "\u{2588}" } else { text },
                     Style::default().fg(theme.text_primary),

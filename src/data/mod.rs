@@ -51,6 +51,14 @@ pub struct TodoItem {
     pub category: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CategoryEntry {
+    pub path: String,
+    pub label: String,
+    pub depth: usize,
+    pub is_all: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoData {
     next_id: u64,
@@ -152,7 +160,7 @@ impl TodoData {
 
     pub fn set_category(&mut self, id: u64, category: Option<String>) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
-            item.category = category;
+            item.category = category.and_then(|name| normalize_category(&name));
         }
     }
 
@@ -168,14 +176,73 @@ impl TodoData {
         cats
     }
 
+    pub fn category_entries(&self) -> Vec<CategoryEntry> {
+        let categories = self.categories();
+        let mut entries = Vec::new();
+        let mut i = 0;
+
+        while i < categories.len() {
+            let cat = &categories[i];
+            let Some((parent, child)) = cat.split_once('/') else {
+                let has_children = categories
+                    .iter()
+                    .any(|other| other.starts_with(&format!("{cat}/")));
+                if !has_children {
+                    entries.push(CategoryEntry {
+                        path: cat.clone(),
+                        label: cat.clone(),
+                        depth: 0,
+                        is_all: false,
+                    });
+                }
+                i += 1;
+                continue;
+            };
+
+            let parent = parent.to_string();
+            entries.push(CategoryEntry {
+                path: parent.clone(),
+                label: parent.clone(),
+                depth: 0,
+                is_all: false,
+            });
+            entries.push(CategoryEntry {
+                path: parent.clone(),
+                label: "all".to_string(),
+                depth: 1,
+                is_all: true,
+            });
+
+            while i < categories.len() {
+                let current = &categories[i];
+                let prefix = format!("{parent}/");
+                if !current.starts_with(&prefix) {
+                    break;
+                }
+                let label = current.strip_prefix(&prefix).unwrap_or(child).to_string();
+                entries.push(CategoryEntry {
+                    path: current.clone(),
+                    label,
+                    depth: 1,
+                    is_all: false,
+                });
+                i += 1;
+            }
+        }
+
+        entries
+    }
+
     pub fn add_category(&mut self, name: &str) {
-        if !self.categories.contains(&name.to_string()) {
-            self.categories.push(name.to_string());
+        if let Some(name) = normalize_category(name) {
+            if !self.categories.contains(&name) {
+                self.categories.push(name);
+            }
         }
     }
 
     pub fn remove_category(&mut self, name: &str) {
-        self.categories.retain(|c| c != name);
+        self.categories.retain(|c| !category_matches(Some(c), name));
     }
 
     pub fn cycle_priority(&mut self, id: u64, forward: bool) {
@@ -233,5 +300,97 @@ impl TodoData {
 
     pub fn save(&self) {
         let _ = Storage::save(self);
+    }
+}
+
+pub fn normalize_category(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+pub fn category_matches(category: Option<&str>, filter: &str) -> bool {
+    let Some(category) = category else {
+        return false;
+    };
+    category == filter || category.starts_with(&format!("{filter}/"))
+}
+
+pub fn category_badge(category: &str, filter: Option<&str>) -> Option<String> {
+    match filter {
+        None => Some(category.replace('/', "|")),
+        Some(active) if category_matches(Some(category), active) => {
+            let rel = category.strip_prefix(active).unwrap_or(category);
+            let rel = rel.strip_prefix('/').unwrap_or(rel);
+            if rel.is_empty() {
+                None
+            } else {
+                Some(rel.replace('/', "|"))
+            }
+        }
+        Some(_) => Some(category.replace('/', "|")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_category_filters_match_branch() {
+        assert!(category_matches(Some("Work/work2"), "Work"));
+        assert!(category_matches(Some("Work/work2"), "Work/work2"));
+        assert!(!category_matches(Some("Personal/p1"), "Work"));
+        assert!(!category_matches(None, "Work"));
+    }
+
+    #[test]
+    fn category_badges_shorten_inside_active_branch() {
+        assert_eq!(
+            category_badge("Work/work2", None),
+            Some("Work|work2".to_string())
+        );
+        assert_eq!(
+            category_badge("Work/work2", Some("Work")),
+            Some("work2".to_string())
+        );
+        assert_eq!(category_badge("Work", Some("Work")), None);
+    }
+
+    #[test]
+    fn category_entries_include_parent_all_and_children() {
+        let mut data = TodoData::new();
+        data.add_category("Work/work1");
+        data.add_category("Work/work2");
+
+        let entries = data.category_entries();
+        let rows: Vec<(&str, &str, usize, bool)> = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.path.as_str(),
+                    entry.label.as_str(),
+                    entry.depth,
+                    entry.is_all,
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("Work", "Work", 0, false),
+                ("Work", "all", 1, true),
+                ("Work/work1", "work1", 1, false),
+                ("Work/work2", "work2", 1, false),
+            ]
+        );
     }
 }
