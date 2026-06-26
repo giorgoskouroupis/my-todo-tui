@@ -49,6 +49,8 @@ pub struct TodoItem {
     pub due_date: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +83,7 @@ impl TodoData {
     }
 
     pub fn pending_count(&self) -> usize {
-        self.items.iter().filter(|i| !i.done).count()
+        self.items.iter().filter(|i| !i.done && !i.archived).count()
     }
 
     pub fn add(&mut self, text: &str) -> u64 {
@@ -105,6 +107,7 @@ impl TodoData {
             pinned: false,
             due_date: None,
             category: None,
+            archived: false,
         });
 
         id
@@ -161,6 +164,12 @@ impl TodoData {
     pub fn set_category(&mut self, id: u64, category: Option<String>) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             item.category = category.and_then(|name| normalize_category(&name));
+        }
+    }
+
+    pub fn set_archived(&mut self, id: u64, archived: bool) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.archived = archived;
         }
     }
 
@@ -243,6 +252,39 @@ impl TodoData {
 
     pub fn remove_category(&mut self, name: &str) {
         self.categories.retain(|c| !category_matches(Some(c), name));
+    }
+
+    pub fn rename_category(&mut self, old: &str, new: &str) -> bool {
+        let Some(new) = normalize_category(new) else {
+            return false;
+        };
+        let old_prefix = format!("{old}/");
+        let mut changed = false;
+
+        for item in &mut self.items {
+            if let Some(category) = item.category.as_mut() {
+                if category == old {
+                    *category = new.clone();
+                    changed = true;
+                } else if let Some(suffix) = category.strip_prefix(&old_prefix) {
+                    *category = format!("{new}/{suffix}");
+                    changed = true;
+                }
+            }
+        }
+
+        for category in &mut self.categories {
+            if category == old {
+                *category = new.clone();
+                changed = true;
+            } else if let Some(suffix) = category.strip_prefix(&old_prefix) {
+                *category = format!("{new}/{suffix}");
+                changed = true;
+            }
+        }
+        self.categories.sort();
+        self.categories.dedup();
+        changed
     }
 
     pub fn cycle_priority(&mut self, id: u64, forward: bool) {
@@ -392,5 +434,20 @@ mod tests {
                 ("Work/work2", "work2", 1, false),
             ]
         );
+    }
+
+    #[test]
+    fn rename_category_updates_branch_items_and_stored_categories() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/work1".to_string()));
+        data.add_category("Work/work2");
+
+        assert!(data.rename_category("Work", "Office"));
+
+        let item = data.get(id).unwrap();
+        assert_eq!(item.category.as_deref(), Some("Office/work1"));
+        assert!(data.categories().contains(&"Office/work2".to_string()));
+        assert!(!data.categories().contains(&"Work/work2".to_string()));
     }
 }

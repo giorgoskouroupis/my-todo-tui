@@ -66,7 +66,7 @@ todo-tui
 | `/` | Command mode |
 | `Ctrl+C` | Quit |
 
-Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`. In `/delete`, `Ctrl+A` opens a confirmation popup for all current delete targets. In the items pane it deletes visible items only and keeps category names; in the category pane it deletes all items and all category names.
+Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/themes`, `/priorities`, `/categories`, `/sort`, `/help`, and `/keybindings`. v0.6 also adds `/archive`, `/archived`, `/unarchive`, `/due today|week|overdue|clear`, `/rename old new`, and `/move category`. In `/delete`, `Ctrl+A` opens a confirmation popup for all current delete targets. In the items pane it deletes visible items only and keeps category names; in the category pane it deletes all items and all category names.
 
 Categories can be flat (`Dog`) or nested with `/` (`Work/work2`). The sidebar groups nested categories under their parent with an `all` row. In the sidebar, type a category name directly and press `Enter`; if categories already exist, the placement popup asks whether to attach under the highlighted category or create at root. From `All`, attach opens a parent picker. Manual `Parent/child` entry still works as a shortcut. Global `All` shows full badges like `[Work|work2]`; a parent filter like `Work` shows shorter child badges like `[work2]`.
 

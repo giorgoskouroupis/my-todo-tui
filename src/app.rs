@@ -22,6 +22,13 @@ pub enum SortMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DueFilter {
+    Today,
+    Week,
+    Overdue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Items,
     Categories,
@@ -156,7 +163,9 @@ pub struct App {
     pub clip: Clipboard,
     pub filter: String,
     pub priority_filter: Option<Priority>,
+    pub due_filter: Option<DueFilter>,
     pub category_filter: Option<String>,
+    pub show_archived: bool,
     pub pane: Pane,
     pub category_index: usize,
     pub sort_mode: SortMode,
@@ -180,7 +189,9 @@ impl App {
             clip: Clipboard::new(),
             filter: String::new(),
             priority_filter: None,
+            due_filter: None,
             category_filter: None,
+            show_archived: false,
             pane: Pane::Items,
             category_index: 0,
             sort_mode: SortMode::Default,
@@ -201,7 +212,13 @@ impl App {
     }
 
     pub fn items(&self) -> Vec<TodoItem> {
-        let items = self.data.items().to_vec();
+        let items: Vec<TodoItem> = self
+            .data
+            .items()
+            .iter()
+            .filter(|item| item.archived == self.show_archived)
+            .cloned()
+            .collect();
         let items: Vec<TodoItem> = match self.priority_filter {
             Some(p) => items.into_iter().filter(|i| i.priority == p).collect(),
             None => items,
@@ -210,6 +227,31 @@ impl App {
             Some(cat) => items
                 .into_iter()
                 .filter(|i| category_matches(i.category.as_deref(), cat))
+                .collect(),
+            None => items,
+        };
+        let items: Vec<TodoItem> = match self.due_filter {
+            Some(DueFilter::Today) => items
+                .into_iter()
+                .filter(|i| i.due_date.as_deref().and_then(crate::date::days_until) == Some(0))
+                .collect(),
+            Some(DueFilter::Week) => items
+                .into_iter()
+                .filter(|i| {
+                    i.due_date
+                        .as_deref()
+                        .and_then(crate::date::days_until)
+                        .is_some_and(|days| (0..=7).contains(&days))
+                })
+                .collect(),
+            Some(DueFilter::Overdue) => items
+                .into_iter()
+                .filter(|i| {
+                    i.due_date
+                        .as_deref()
+                        .and_then(crate::date::days_until)
+                        .is_some_and(|days| days < 0)
+                })
                 .collect(),
             None => items,
         };
@@ -403,6 +445,8 @@ impl App {
                         pending_count: app.pending_count(),
                         filter: &app.filter,
                         priority_filter: &app.priority_filter,
+                        due_filter: &app.due_filter,
+                        show_archived: app.show_archived,
                         pane: &app.pane,
                         category_index: app.category_index,
                         categories: &categories,
@@ -920,6 +964,111 @@ impl App {
                         self.data.clear_done();
                         self.mark_dirty();
                         self.mode = Mode::Normal;
+                    }
+                    "archive" => {
+                        match arg.as_deref() {
+                            Some("done") => {
+                                let ids: Vec<u64> = self
+                                    .data
+                                    .items()
+                                    .iter()
+                                    .filter(|item| item.done && !item.archived)
+                                    .map(|item| item.id)
+                                    .collect();
+                                for id in ids {
+                                    self.data.set_archived(id, true);
+                                }
+                                self.mark_dirty();
+                            }
+                            Some("all") => {
+                                let ids: Vec<u64> =
+                                    self.items().iter().map(|item| item.id).collect();
+                                for id in ids {
+                                    self.data.set_archived(id, true);
+                                }
+                                self.mark_dirty();
+                            }
+                            _ => {
+                                if let Some(id) =
+                                    self.items().get(self.selected_index()).map(|item| item.id)
+                                {
+                                    self.data.set_archived(id, true);
+                                    self.mark_dirty();
+                                }
+                            }
+                        }
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
+                    "archived" => {
+                        self.show_archived = !self.show_archived;
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
+                    "unarchive" => {
+                        match arg.as_deref() {
+                            Some("all") => {
+                                let ids: Vec<u64> =
+                                    self.items().iter().map(|item| item.id).collect();
+                                for id in ids {
+                                    self.data.set_archived(id, false);
+                                }
+                                self.mark_dirty();
+                            }
+                            _ => {
+                                if let Some(id) =
+                                    self.items().get(self.selected_index()).map(|item| item.id)
+                                {
+                                    self.data.set_archived(id, false);
+                                    self.mark_dirty();
+                                }
+                            }
+                        }
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
+                    "due" => {
+                        self.due_filter = match arg.as_deref() {
+                            Some("today") => Some(DueFilter::Today),
+                            Some("week") => Some(DueFilter::Week),
+                            Some("overdue") => Some(DueFilter::Overdue),
+                            Some("clear") | Some("all") | None => None,
+                            _ => self.due_filter,
+                        };
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
+                    "rename" => {
+                        if let Some(arg) = arg {
+                            let parts: Vec<&str> = arg.split_whitespace().collect();
+                            if parts.len() >= 2 && self.data.rename_category(parts[0], parts[1]) {
+                                if self.category_filter.as_deref() == Some(parts[0]) {
+                                    self.category_filter = Some(parts[1].to_string());
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
+                    "move" | "m" => {
+                        if let Some(category) = arg.and_then(|name| normalize_category(&name)) {
+                            if let Some(id) =
+                                self.items().get(self.selected_index()).map(|item| item.id)
+                            {
+                                self.data.add_category(&category);
+                                self.data.set_category(id, Some(category.clone()));
+                                self.category_filter = Some(category.clone());
+                                let cats = self.data.category_entries();
+                                if let Some(pos) = cats.iter().position(|cat| cat.path == category)
+                                {
+                                    self.category_index = pos + 1;
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
                     }
                     "themes" => {
                         self.mode = Mode::ThemePicker { selected: 0 };
@@ -1491,21 +1640,28 @@ impl App {
 }
 
 pub const COMMANDS: &[(&str, &str)] = &[
+    ("archive", "Archive selected/done/all visible"),
+    ("archived", "Toggle archived view"),
     ("clear", "Clear completed items"),
     ("c", "Alias for clear"),
     ("delete", "Bulk delete items"),
     ("done", "Bulk toggle done"),
+    ("due", "Filter due dates"),
     ("d", "Alias for delete"),
     ("help", "Show help"),
     ("keybindings", "Show keybindings"),
     ("categories", "Filter by category"),
     ("cat", "Alias for categories"),
+    ("move", "Move selected item to category"),
+    ("m", "Alias for move"),
     ("priorities", "Filter by priority"),
     ("p", "Alias for priorities"),
+    ("rename", "Rename category path"),
     ("search", "Filter items by text"),
     ("s", "Alias for search"),
     ("sort", "Sort items (priority/due/default)"),
     ("themes", "List available themes"),
+    ("unarchive", "Restore archived item/all visible"),
     ("x", "Alias for done"),
 ];
 
@@ -1520,7 +1676,7 @@ pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> 
 pub fn get_command_list() -> Vec<(&'static str, &'static str)> {
     COMMANDS
         .iter()
-        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k" | "cat"))
+        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k" | "cat" | "m"))
         .copied()
         .collect()
 }
@@ -1544,7 +1700,37 @@ fn get_completions(prefix: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::App;
+    use std::time::Instant;
+
+    use super::{Action, App, Mode, MultiSelectCmd, Pane, SortMode};
+    use crate::clip::Clipboard;
+    use crate::data::TodoData;
+    use crate::ui::input::InputBuffer;
+    use crate::ui::theme::Theme;
+
+    fn test_app(data: TodoData) -> App {
+        App {
+            data,
+            selected_index: 0,
+            input: InputBuffer::new(),
+            mode: Mode::Normal,
+            clip: Clipboard::new(),
+            filter: String::new(),
+            priority_filter: None,
+            due_filter: None,
+            category_filter: None,
+            show_archived: false,
+            pane: Pane::Items,
+            category_index: 0,
+            sort_mode: SortMode::Default,
+            theme: Theme::one_dark(),
+            completions: Vec::new(),
+            completion_index: 0,
+            dirty: false,
+            last_mutated: Instant::now(),
+            pending_due_date: None,
+        }
+    }
 
     #[test]
     fn category_from_input_attaches_child_to_parent() {
@@ -1560,5 +1746,50 @@ mod tests {
             App::category_from_input(Some("Work"), "Personal/p1"),
             Some("Personal/p1".to_string())
         );
+    }
+
+    #[test]
+    fn ctrl_a_delete_from_category_pane_removes_all_items_and_categories() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/work1".to_string()));
+        data.add_category("Personal");
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.mode = Mode::MultiSelect {
+            cmd: MultiSelectCmd::Delete,
+            selected: Default::default(),
+            selected_categories: Default::default(),
+        };
+
+        app.handle_action(Action::SelectAllMultiSelect);
+        assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+        app.handle_action(Action::ConfirmDeleteYes);
+
+        assert!(app.data.items().is_empty());
+        assert!(app.data.categories().is_empty());
+    }
+
+    #[test]
+    fn ctrl_a_delete_from_items_pane_keeps_category_names() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/work1".to_string()));
+        data.add_category("Work/work1");
+        let mut app = test_app(data);
+        app.pane = Pane::Items;
+        app.category_filter = Some("Work".to_string());
+        app.mode = Mode::MultiSelect {
+            cmd: MultiSelectCmd::Delete,
+            selected: Default::default(),
+            selected_categories: Default::default(),
+        };
+
+        app.handle_action(Action::SelectAllMultiSelect);
+        assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+        app.handle_action(Action::ConfirmDeleteYes);
+
+        assert!(app.data.items().is_empty());
+        assert!(app.data.categories().contains(&"Work/work1".to_string()));
     }
 }

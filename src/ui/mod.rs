@@ -5,7 +5,7 @@ pub mod theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListState, Paragraph};
 
-use crate::app::{get_filtered_commands, Mode, Pane, SortMode};
+use crate::app::{get_filtered_commands, DueFilter, Mode, Pane, SortMode};
 use crate::data::{CategoryEntry, Priority, TodoItem};
 use crate::date::{self, Date};
 
@@ -20,6 +20,8 @@ pub struct RenderState<'a> {
     pub pending_count: usize,
     pub filter: &'a str,
     pub priority_filter: &'a Option<Priority>,
+    pub due_filter: &'a Option<DueFilter>,
+    pub show_archived: bool,
     pub pane: &'a Pane,
     pub category_index: usize,
     pub categories: &'a [String],
@@ -208,6 +210,27 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: 
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("[filter: {:?}]", p).to_lowercase(),
+            Style::default().fg(theme.warning),
+        ));
+    }
+
+    if let Some(filter) = state.due_filter {
+        spans.push(Span::raw("  "));
+        let label = match filter {
+            DueFilter::Today => "today",
+            DueFilter::Week => "week",
+            DueFilter::Overdue => "overdue",
+        };
+        spans.push(Span::styled(
+            format!("[due: {label}]"),
+            Style::default().fg(theme.warning),
+        ));
+    }
+
+    if state.show_archived {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "[archived]",
             Style::default().fg(theme.warning),
         ));
     }
@@ -1033,6 +1056,31 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ))
         .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::styled(
+            "  /archive done   — archive completed items",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /archived       — toggle archived view",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /due week       — filter due dates",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /rename old new — rename category",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
+            "  /move category  — move selected item",
+            Style::default().fg(theme.text_primary),
+        ))
+        .style(Style::default().bg(theme.bg_secondary)),
+        Line::from(Span::styled(
             "  /themes         — pick a theme",
             Style::default().fg(theme.text_primary),
         ))
@@ -1215,10 +1263,14 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
             "Are you sure you want to delete these {} items?",
             texts.len()
         ));
-        for t in texts {
+        let preview_count = texts.len().min(8);
+        for t in texts.iter().take(preview_count) {
             for wrapped in wrap_text(&format!("\"{t}\""), max_content_w.saturating_sub(2)) {
                 lines_text.push(format!("  {wrapped}"));
             }
+        }
+        if texts.len() > preview_count {
+            lines_text.push(format!("  ... and {} more", texts.len() - preview_count));
         }
     }
 
