@@ -58,7 +58,7 @@ pub enum Mode {
     ConfirmDelete {
         ids: Vec<u64>,
         texts: Vec<String>,
-        category_name: Option<String>,
+        category_names: Vec<String>,
     },
     CategoryPicker {
         selected: usize,
@@ -832,7 +832,7 @@ impl App {
                     self.mode = Mode::ConfirmDelete {
                         ids: vec![id],
                         texts: vec![item.text.clone()],
-                        category_name: None,
+                        category_names: Vec::new(),
                     };
                 }
             }
@@ -991,49 +991,30 @@ impl App {
                     return false;
                 }
 
-                let (ids, category_name) = if self.pane == Pane::Categories {
-                    if self.category_index == 0 {
-                        (self.data.items().iter().map(|item| item.id).collect(), None)
-                    } else if let Some(entry) =
-                        self.data.category_entries().get(self.category_index - 1)
-                    {
-                        let category = entry.path.clone();
-                        let ids = self
-                            .data
-                            .items()
-                            .iter()
-                            .filter(|item| category_matches(item.category.as_deref(), &category))
-                            .map(|item| item.id)
-                            .collect();
-                        (ids, Some(category))
-                    } else {
-                        (Vec::new(), None)
-                    }
+                let (ids, category_names) = if self.pane == Pane::Categories {
+                    (
+                        self.data.items().iter().map(|item| item.id).collect(),
+                        self.data.categories(),
+                    )
                 } else {
                     let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
-                    let category_name = self.category_filter.as_ref().and_then(|category| {
-                        let visible: HashSet<u64> = ids.iter().copied().collect();
-                        let branch: HashSet<u64> = self
-                            .data
-                            .items()
-                            .iter()
-                            .filter(|item| category_matches(item.category.as_deref(), category))
-                            .map(|item| item.id)
-                            .collect();
-                        (visible == branch).then(|| category.clone())
-                    });
-                    (ids, category_name)
+                    (ids, Vec::new())
                 };
 
-                let texts: Vec<String> = ids
+                let mut texts: Vec<String> = ids
                     .iter()
                     .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
                     .collect();
-                if !ids.is_empty() {
+                texts.extend(
+                    category_names
+                        .iter()
+                        .map(|category| format!("[category] {category}")),
+                );
+                if !ids.is_empty() || !category_names.is_empty() {
                     self.mode = Mode::ConfirmDelete {
                         ids,
                         texts,
-                        category_name,
+                        category_names,
                     };
                 }
             }
@@ -1109,7 +1090,9 @@ impl App {
             Action::ConfirmDeleteYes => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 if let Mode::ConfirmDelete {
-                    ids, category_name, ..
+                    ids,
+                    category_names,
+                    ..
                 } = mode
                 {
                     for id in ids {
@@ -1117,7 +1100,7 @@ impl App {
                             self.clip.cut(item);
                         }
                     }
-                    if let Some(name) = category_name {
+                    for name in category_names {
                         self.data.remove_category(&name);
                     }
                     self.mark_dirty();
@@ -1348,13 +1331,17 @@ impl App {
                 }
             }
             Action::AddCategory(name) => {
-                if normalize_category(&name).is_some() {
+                if let Some(normalized) = normalize_category(&name) {
                     self.input.clear();
-                    self.mode = Mode::CategoryCreateChoice {
-                        selected: 0,
-                        parent: self.current_category_parent(),
-                        name,
-                    };
+                    if self.data.categories().is_empty() {
+                        self.finish_add_category(normalized);
+                    } else {
+                        self.mode = Mode::CategoryCreateChoice {
+                            selected: 0,
+                            parent: self.current_category_parent(),
+                            name,
+                        };
+                    }
                 } else {
                     self.input.clear();
                     self.mode = Mode::Normal;
@@ -1378,7 +1365,7 @@ impl App {
                 self.mode = Mode::ConfirmDelete {
                     ids,
                     texts,
-                    category_name: Some(name),
+                    category_names: vec![name],
                 };
             }
             Action::CancelCategoryPicker => {
