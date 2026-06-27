@@ -631,7 +631,7 @@ fn render_cmd_completions(
                 Span::styled(
                     format!(
                         "  {}{:<2$}",
-                        command_display_prefix(*cmd, parent_command.as_deref()),
+                        command_display_prefix(cmd, parent_command.as_deref()),
                         display_label,
                         cmd_width
                     ),
@@ -1126,12 +1126,17 @@ fn render_category_filter_picker(
     );
 
     let mut lines = Vec::new();
+    let visible_rows = height.saturating_sub(2) as usize;
+    let safe_selected = selected.min(total.saturating_sub(1));
+    let start = safe_selected.saturating_sub(visible_rows.saturating_sub(1));
+
     for (i, label) in std::iter::once("All")
         .chain(categories.iter().map(|entry| entry.path.as_str()))
         .enumerate()
-        .take(height.saturating_sub(2) as usize)
+        .skip(start)
+        .take(visible_rows)
     {
-        let is_highlighted = i == selected;
+        let is_highlighted = i == safe_selected;
         let bg = if is_highlighted {
             theme.bg_tertiary
         } else {
