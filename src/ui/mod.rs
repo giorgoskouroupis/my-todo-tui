@@ -1950,7 +1950,7 @@ fn render_calendar_popup(
             } else {
                 "  [Tab prompt, Arrows move, Pg month, t today, Del clear]"
             },
-            Style::default().fg(theme.text_muted),
+            Style::default().fg(theme.warning),
         )])
         .style(Style::default().bg(theme.bg_secondary)),
     );
@@ -2246,11 +2246,7 @@ fn render_input(
                 } else {
                     "  [Tab prompt, calendar active]"
                 },
-                Style::default().fg(if *prompt_focused {
-                    theme.accent
-                } else {
-                    theme.text_muted
-                }),
+                Style::default().fg(theme.warning),
             ));
             (line.style(Style::default().bg(theme.bg_primary)), None)
         }
