@@ -57,6 +57,10 @@ fn handle_text_input_key(key: KeyEvent, input: &mut crate::ui::input::InputBuffe
             input.move_end(false);
             true
         }
+        KeyCode::Char('h') if key.modifiers == KeyModifiers::CONTROL => {
+            input.delete_word_back();
+            true
+        }
         KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
             input.delete_word_back();
             true
@@ -99,13 +103,13 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
     let selected_id = has_selection.then(|| items[idx].id);
 
     match key.code {
-        KeyCode::Up | KeyCode::Char('k')
+        KeyCode::Up
             if !key.modifiers.contains(KeyModifiers::ALT)
                 && !key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
             Some(Action::SelectPrev)
         }
-        KeyCode::Down | KeyCode::Char('j')
+        KeyCode::Down
             if !key.modifiers.contains(KeyModifiers::ALT)
                 && !key.modifiers.contains(KeyModifiers::CONTROL) =>
         {
@@ -183,15 +187,12 @@ pub fn handle_multiselect(
     let selected_id = has_selection.then(|| items[idx].id);
 
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::SelectAllMultiSelect)
         }
         KeyCode::Char(' ') if selected_id.is_some() => {
-            Some(Action::ToggleMultiSelect(selected_id.unwrap()))
-        }
-        KeyCode::Char('x') if selected_id.is_some() => {
             Some(Action::ToggleMultiSelect(selected_id.unwrap()))
         }
         KeyCode::Enter => Some(Action::ConfirmMultiSelect),
@@ -216,14 +217,12 @@ pub fn handle_category_multiselect(
     };
 
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::SelectAllMultiSelect)
         }
-        KeyCode::Char(' ') | KeyCode::Char('x') => {
-            selected_category().map(Action::ToggleCategoryMultiSelect)
-        }
+        KeyCode::Char(' ') => selected_category().map(Action::ToggleCategoryMultiSelect),
         KeyCode::Enter => Some(Action::ConfirmMultiSelect),
         KeyCode::Esc => Some(Action::CancelMultiSelect),
         _ => None,
@@ -262,8 +261,8 @@ pub fn handle_confirm_delete(key: KeyEvent) -> Option<Action> {
 
 pub fn handle_theme_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelThemePicker),
         _ => None,
     }
@@ -271,9 +270,36 @@ pub fn handle_theme_picker(key: KeyEvent) -> Option<Action> {
 
 pub fn handle_priority_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelPriorityPicker),
+        _ => None,
+    }
+}
+
+pub fn handle_archive_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Esc => Some(Action::CancelArchivePicker),
+        _ => None,
+    }
+}
+
+pub fn handle_filter_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Esc => Some(Action::CancelFilterPicker),
+        _ => None,
+    }
+}
+
+pub fn handle_due_date_filter_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Esc => Some(Action::CancelDueDateFilterPicker),
         _ => None,
     }
 }
@@ -284,8 +310,8 @@ pub fn handle_sidebar(
     category_index: usize,
 ) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Enter => {
             if category_index == 0 || category_index <= categories.len() {
                 Some(Action::CategorySelect(category_index))
@@ -317,8 +343,8 @@ pub fn handle_sidebar(
 
 pub fn handle_category_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelCategoryPicker),
         _ => None,
     }
@@ -326,8 +352,8 @@ pub fn handle_category_picker(key: KeyEvent) -> Option<Action> {
 
 pub fn handle_category_create_choice(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Char('1') => Some(Action::AddCategoryChoice(0)),
         KeyCode::Char('2') => Some(Action::AddCategoryChoice(1)),
         KeyCode::Enter => Some(Action::AddCategoryChoice(usize::MAX)),
@@ -338,8 +364,8 @@ pub fn handle_category_create_choice(key: KeyEvent) -> Option<Action> {
 
 pub fn handle_category_parent_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Enter => Some(Action::SelectCategoryParent(usize::MAX)),
         KeyCode::Esc => Some(Action::CancelCategoryAdd),
         _ => None,
@@ -368,11 +394,11 @@ pub fn handle_category_add(
 
 pub fn handle_sort_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::SelectPrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::SelectNext),
-        KeyCode::Char('p') => Some(Action::SortSelect(0)),
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Char('p') => Some(Action::SortSelect(2)),
         KeyCode::Char('d') => Some(Action::SortSelect(1)),
-        KeyCode::Char('n') => Some(Action::SortSelect(2)),
+        KeyCode::Char('n') => Some(Action::SortSelect(0)),
         KeyCode::Esc => Some(Action::CancelSortPicker),
         _ => None,
     }
@@ -411,10 +437,10 @@ pub fn handle_due_date_calendar(
     }
 
     match key.code {
-        KeyCode::Left | KeyCode::Char('h') => Some(Action::CalendarMove(-1)),
-        KeyCode::Right | KeyCode::Char('l') => Some(Action::CalendarMove(1)),
-        KeyCode::Up | KeyCode::Char('k') => Some(Action::CalendarMove(-7)),
-        KeyCode::Down | KeyCode::Char('j') => Some(Action::CalendarMove(7)),
+        KeyCode::Left => Some(Action::CalendarMove(-1)),
+        KeyCode::Right => Some(Action::CalendarMove(1)),
+        KeyCode::Up => Some(Action::CalendarMove(-7)),
+        KeyCode::Down => Some(Action::CalendarMove(7)),
         KeyCode::PageUp => Some(Action::CalendarMonth(-1)),
         KeyCode::PageDown => Some(Action::CalendarMonth(1)),
         KeyCode::Char('t') => Some(Action::CalendarToday),

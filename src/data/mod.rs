@@ -67,6 +67,8 @@ pub struct TodoData {
     items: Vec<TodoItem>,
     #[serde(default)]
     categories: Vec<String>,
+    #[serde(default)]
+    archived_categories: Vec<String>,
 }
 
 impl TodoData {
@@ -75,6 +77,7 @@ impl TodoData {
             next_id: 1,
             items: Vec::new(),
             categories: Vec::new(),
+            archived_categories: Vec::new(),
         }
     }
 
@@ -174,19 +177,33 @@ impl TodoData {
     }
 
     pub fn categories(&self) -> Vec<String> {
+        self.categories_for_archived(false)
+    }
+
+    pub fn categories_for_archived(&self, archived: bool) -> Vec<String> {
         let mut cats: Vec<String> = self
             .items
             .iter()
+            .filter(|i| i.archived == archived)
             .filter_map(|i| i.category.clone())
             .collect();
-        cats.extend(self.categories.iter().cloned());
+        let stored = if archived {
+            &self.archived_categories
+        } else {
+            &self.categories
+        };
+        cats.extend(stored.iter().cloned());
         cats.sort();
         cats.dedup();
         cats
     }
 
     pub fn category_entries(&self) -> Vec<CategoryEntry> {
-        let categories = self.categories();
+        self.category_entries_for_archived(false)
+    }
+
+    pub fn category_entries_for_archived(&self, archived: bool) -> Vec<CategoryEntry> {
+        let categories = self.categories_for_archived(archived);
         let mut entries = Vec::new();
         let mut i = 0;
 
@@ -245,13 +262,34 @@ impl TodoData {
     pub fn add_category(&mut self, name: &str) {
         if let Some(name) = normalize_category(name) {
             if !self.categories.contains(&name) {
-                self.categories.push(name);
+                self.categories.push(name.clone());
             }
+            self.archived_categories.retain(|c| c != &name);
         }
     }
 
     pub fn remove_category(&mut self, name: &str) {
         self.categories.retain(|c| !category_matches(Some(c), name));
+        self.archived_categories
+            .retain(|c| !category_matches(Some(c), name));
+    }
+
+    pub fn set_category_archived(&mut self, name: &str, archived: bool) {
+        let Some(name) = normalize_category(name) else {
+            return;
+        };
+
+        if archived {
+            move_category_branch(&mut self.categories, &mut self.archived_categories, &name);
+        } else {
+            move_category_branch(&mut self.archived_categories, &mut self.categories, &name);
+        }
+
+        for item in &mut self.items {
+            if category_matches(item.category.as_deref(), &name) {
+                item.archived = archived;
+            }
+        }
     }
 
     pub fn rename_category(&mut self, old: &str, new: &str) -> bool {
@@ -284,6 +322,17 @@ impl TodoData {
         }
         self.categories.sort();
         self.categories.dedup();
+        for category in &mut self.archived_categories {
+            if category == old {
+                *category = new.clone();
+                changed = true;
+            } else if let Some(suffix) = category.strip_prefix(&old_prefix) {
+                *category = format!("{new}/{suffix}");
+                changed = true;
+            }
+        }
+        self.archived_categories.sort();
+        self.archived_categories.dedup();
         changed
     }
 
@@ -343,6 +392,26 @@ impl TodoData {
     pub fn save(&self) {
         let _ = Storage::save(self);
     }
+}
+
+fn move_category_branch(from: &mut Vec<String>, to: &mut Vec<String>, name: &str) {
+    let mut moved = Vec::new();
+    from.retain(|category| {
+        if category_matches(Some(category), name) {
+            moved.push(category.clone());
+            false
+        } else {
+            true
+        }
+    });
+
+    if moved.is_empty() {
+        moved.push(name.to_string());
+    }
+
+    to.extend(moved);
+    to.sort();
+    to.dedup();
 }
 
 pub fn normalize_category(name: &str) -> Option<String> {

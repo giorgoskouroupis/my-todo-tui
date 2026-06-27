@@ -8,7 +8,9 @@ use std::io::{self, Stdout};
 
 use crate::clip::Clipboard;
 use crate::config;
-use crate::data::{category_matches, normalize_category, Priority, TodoData, TodoItem};
+use crate::data::{
+    category_matches, normalize_category, CategoryEntry, Priority, TodoData, TodoItem,
+};
 use crate::date::Date;
 use crate::keys;
 use crate::ui::input::InputBuffer;
@@ -38,6 +40,8 @@ pub enum Pane {
 pub enum MultiSelectCmd {
     Delete,
     ToggleDone,
+    Archive,
+    RestoreArchive,
 }
 
 pub enum Mode {
@@ -69,6 +73,10 @@ pub enum Mode {
     },
     CategoryPicker {
         selected: usize,
+        target: CategoryPickerTarget,
+    },
+    CategoryFilterPicker {
+        selected: usize,
     },
     CategoryCreateChoice {
         selected: usize,
@@ -85,6 +93,18 @@ pub enum Mode {
     SortPicker {
         selected: usize,
     },
+    ArchivePicker {
+        selected: usize,
+    },
+    RenameInput {
+        target: RenameTarget,
+    },
+    FilterPicker {
+        selected: usize,
+    },
+    DueDateFilterPicker {
+        selected: usize,
+    },
     DueDateCalendar {
         edit_id: Option<u64>,
         saved_text: String,
@@ -93,6 +113,18 @@ pub enum Mode {
         selected: Date,
         prompt_focused: bool,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenameTarget {
+    Item(u64),
+    Category(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CategoryPickerTarget {
+    AssignItem,
+    MoveCategory(String),
 }
 
 pub enum Action {
@@ -132,6 +164,9 @@ pub enum Action {
     SwitchPane,
     OpenCategoryPicker,
     CategorySelect(usize),
+    CategoryFilterSelect(usize),
+    CategoryFilterParent(usize),
+    CategoryParent,
     AddCategory(String),
     AddCategoryChoice(usize),
     SelectCategoryParent(usize),
@@ -143,6 +178,14 @@ pub enum Action {
     StartSortPicker,
     SortSelect(usize),
     CancelSortPicker,
+    SubmitRename,
+    CancelArchivePicker,
+    ArchiveSelect(usize),
+    CancelFilterPicker,
+    FilterSelect(usize),
+    CancelDueDateFilterPicker,
+    DueDateFilterSelect(usize),
+    PopupBack,
     SubmitDueDate,
     CancelDueDate,
     CalendarMove(i32),
@@ -329,15 +372,22 @@ impl App {
         if self.category_index == 0 {
             return None;
         }
-        let entries = self.data.category_entries();
+        let entries = self.category_entries();
         let path = entries.get(self.category_index - 1)?.path.as_str();
         let parent = path.split_once('/').map_or(path, |(parent, _)| parent);
         normalize_category(parent)
     }
 
+    fn categories(&self) -> Vec<String> {
+        self.data.categories_for_archived(self.show_archived)
+    }
+
+    fn category_entries(&self) -> Vec<CategoryEntry> {
+        self.data.category_entries_for_archived(self.show_archived)
+    }
+
     fn root_categories(&self) -> Vec<String> {
         let mut roots: Vec<String> = self
-            .data
             .categories()
             .iter()
             .filter_map(|cat| cat.split('/').next())
@@ -360,7 +410,7 @@ impl App {
     }
 
     fn set_category_index(&mut self, idx: usize) {
-        let cats = self.data.category_entries();
+        let cats = self.category_entries();
         self.category_index = idx.min(cats.len());
         self.category_filter = if self.category_index == 0 {
             None
@@ -371,8 +421,120 @@ impl App {
         self.clamp_selection();
     }
 
+    fn parent_category_index_for(&self, idx: usize) -> usize {
+        if idx == 0 {
+            return 0;
+        }
+
+        let cats = self.category_entries();
+        let Some(current) = cats.get(idx - 1) else {
+            return 0;
+        };
+
+        if current.is_all {
+            return cats
+                .iter()
+                .position(|entry| entry.path == current.path && entry.depth == 0)
+                .map_or(0, |idx| idx + 1);
+        }
+
+        let Some((parent, _)) = current.path.rsplit_once('/') else {
+            return 0;
+        };
+
+        cats.iter()
+            .position(|entry| entry.path == parent && entry.depth == 0)
+            .map_or(0, |idx| idx + 1)
+    }
+
+    fn parent_category_index(&self) -> usize {
+        self.parent_category_index_for(self.category_index)
+    }
+
+    fn selected_category_path(&self) -> Option<String> {
+        if self.category_index == 0 {
+            None
+        } else {
+            self.category_entries()
+                .get(self.category_index - 1)
+                .map(|entry| entry.path.clone())
+        }
+    }
+
+    fn set_current_category_archived(&mut self, archived: bool) {
+        if self.pane != Pane::Categories {
+            return;
+        }
+
+        if let Some(category) = self.selected_category_path() {
+            self.data.set_category_archived(&category, archived);
+        } else {
+            let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+            let categories = self.categories();
+            for id in ids {
+                self.data.set_archived(id, archived);
+            }
+            for category in categories {
+                self.data.set_category_archived(&category, archived);
+            }
+        }
+        self.mark_dirty();
+        self.category_index = self.category_index.min(self.category_entries().len());
+        self.clamp_selection();
+    }
+
+    fn set_visible_archived(&mut self, archived: bool) {
+        let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+        let categories = if self.pane == Pane::Categories {
+            self.categories()
+        } else {
+            Vec::new()
+        };
+
+        for id in ids {
+            self.data.set_archived(id, archived);
+        }
+        for category in categories {
+            self.data.set_category_archived(&category, archived);
+        }
+        self.mark_dirty();
+        self.category_index = self.category_index.min(self.category_entries().len());
+        self.clamp_selection();
+    }
+
+    fn move_category_to(&mut self, old_category: &str, destination: Option<&str>) {
+        let Some(old_category) = normalize_category(old_category) else {
+            return;
+        };
+        let leaf = old_category.rsplit('/').next().unwrap_or(&old_category);
+        let new_category = match destination.and_then(normalize_category) {
+            Some(parent) => {
+                if category_matches(Some(&parent), &old_category) {
+                    return;
+                }
+                normalize_category(&format!("{parent}/{leaf}"))
+            }
+            None => normalize_category(leaf),
+        };
+        let Some(new_category) = new_category else {
+            return;
+        };
+        if new_category == old_category || category_matches(Some(&new_category), &old_category) {
+            return;
+        }
+
+        if self.data.rename_category(&old_category, &new_category) {
+            self.category_filter = Some(new_category.clone());
+            let cats = self.category_entries();
+            if let Some(pos) = cats.iter().position(|entry| entry.path == new_category) {
+                self.category_index = pos + 1;
+            }
+            self.mark_dirty();
+        }
+    }
+
     fn switch_category_filter(&mut self, direction: i32, parent_only: bool) {
-        let cats = self.data.category_entries();
+        let cats = self.category_entries();
         if parent_only {
             let parent_indices: Vec<usize> = std::iter::once(0)
                 .chain(
@@ -414,7 +576,7 @@ impl App {
     fn finish_add_category(&mut self, name: String) {
         self.data.add_category(&name);
         self.mark_dirty();
-        let cats = self.data.category_entries();
+        let cats = self.category_entries();
         if let Some(pos) = cats.iter().position(|c| c.path == name) {
             self.category_index = pos + 1;
         }
@@ -433,8 +595,8 @@ impl App {
         loop {
             terminal.draw(|f| {
                 let items = app.items();
-                let categories = app.data.categories();
-                let category_entries = app.data.category_entries();
+                let categories = app.categories();
+                let category_entries = app.category_entries();
                 crate::ui::render(
                     f,
                     crate::ui::RenderState {
@@ -499,6 +661,9 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if is_keybindings_shortcut(key) {
+            return Some(Action::ExecuteCommand("keybindings".to_string()));
+        }
         if key.code == KeyCode::Char('/')
             && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
         {
@@ -521,6 +686,9 @@ impl App {
             match key.code {
                 KeyCode::Left if self.pane == Pane::Items => return Some(Action::SwitchPane),
                 KeyCode::Right if self.pane == Pane::Categories => return Some(Action::SwitchPane),
+                KeyCode::Backspace if matches!(self.mode, Mode::Normal) => {
+                    return Some(Action::CategoryParent);
+                }
                 KeyCode::PageUp => {
                     return Some(Action::SwitchCategoryFilter(
                         -1,
@@ -537,10 +705,49 @@ impl App {
             }
         }
 
+        if key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Right => {
+                    if let Some(action) = self.popup_list_enter_action() {
+                        return Some(action);
+                    }
+                }
+                KeyCode::Left => {
+                    if matches!(self.mode, Mode::Command { .. }) {
+                        self.input.clear();
+                        self.completions.clear();
+                        self.completion_index = 0;
+                        if let Mode::Command { ref mut selected } = &mut self.mode {
+                            *selected = 0;
+                        }
+                        return None;
+                    }
+                    if is_popup_list_mode(&self.mode) {
+                        return Some(Action::PopupBack);
+                    }
+                }
+                KeyCode::Backspace if matches!(self.mode, Mode::Command { .. }) => {
+                    if !self.input.is_empty() {
+                        self.input.clear();
+                        self.completions.clear();
+                        self.completion_index = 0;
+                        if let Mode::Command { ref mut selected } = &mut self.mode {
+                            *selected = 0;
+                        }
+                    }
+                    return None;
+                }
+                KeyCode::Backspace if is_popup_list_mode(&self.mode) => {
+                    return Some(Action::PopupBack);
+                }
+                _ => {}
+            }
+        }
+
         match &self.mode {
             Mode::Normal => {
                 if self.pane == Pane::Categories {
-                    let entries = self.data.category_entries();
+                    let entries = self.category_entries();
                     keys::handle_sidebar(key, &entries, self.category_index)
                 } else {
                     let items = self.items();
@@ -548,14 +755,20 @@ impl App {
                 }
             }
             Mode::Editing { .. } => keys::handle_editing(key, &mut self.input),
+            Mode::RenameInput { .. } => {
+                if let KeyCode::Enter = key.code {
+                    Some(Action::SubmitRename)
+                } else if let KeyCode::Esc = key.code {
+                    Some(Action::CancelEdit)
+                } else {
+                    keys::handle_editing(key, &mut self.input)
+                }
+            }
             Mode::Searching => keys::handle_search(key, &mut self.filter),
             Mode::Command { selected } => {
                 if let KeyCode::Enter = key.code {
-                    let filtered = get_filtered_commands(self.input.text());
-                    if let Some((cmd, _)) = filtered.get(*selected) {
-                        return Some(Action::ExecuteCommand(cmd.to_string()));
-                    }
-                    return None;
+                    return resolve_command_input(self.input.text(), *selected)
+                        .map(Action::ExecuteCommand);
                 }
 
                 let action = keys::handle_command(key, &mut self.input);
@@ -564,13 +777,11 @@ impl App {
                     self.completion_index = 0;
                 } else if let KeyCode::Tab = key.code {
                     return Some(Action::TabComplete);
-                } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k'))
-                    && !key.modifiers.is_empty()
-                {
+                } else if matches!(key.code, KeyCode::Up) && !key.modifiers.is_empty() {
                     return action;
-                } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
+                } else if matches!(key.code, KeyCode::Up) {
                     return Some(Action::SelectPrev);
-                } else if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
+                } else if matches!(key.code, KeyCode::Down) {
                     return Some(Action::SelectNext);
                 } else if matches!(key.code, KeyCode::Char(_)) {
                     self.completions.clear();
@@ -583,7 +794,7 @@ impl App {
             }
             Mode::MultiSelect { .. } => {
                 if self.pane == Pane::Categories {
-                    let entries = self.data.category_entries();
+                    let entries = self.category_entries();
                     keys::handle_category_multiselect(key, &entries, self.category_index)
                 } else {
                     let items = self.items();
@@ -604,7 +815,7 @@ impl App {
                 }
                 action
             }
-            Mode::CategoryPicker { selected } => {
+            Mode::CategoryPicker { selected, target } => {
                 let nav_action = keys::handle_category_picker(key);
                 if nav_action.is_some() {
                     return nav_action;
@@ -612,7 +823,9 @@ impl App {
                 match key.code {
                     KeyCode::Enter => {
                         let text = self.input.text().to_string();
-                        if text.is_empty() {
+                        if text.is_empty()
+                            || matches!(target, CategoryPickerTarget::MoveCategory(_))
+                        {
                             Some(Action::CategorySelect(*selected))
                         } else {
                             Some(Action::CreateAndAssignCategory(text))
@@ -624,7 +837,8 @@ impl App {
                     }
                     _ => {
                         if let KeyCode::Char(c) = key.code {
-                            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            if matches!(target, CategoryPickerTarget::AssignItem)
+                                && !key.modifiers.contains(KeyModifiers::CONTROL)
                                 && !key.modifiers.contains(KeyModifiers::ALT)
                             {
                                 self.input.insert_char(c);
@@ -633,6 +847,17 @@ impl App {
                         None
                     }
                 }
+            }
+            Mode::CategoryFilterPicker { selected } => {
+                let action = keys::handle_category_picker(key);
+                if action.is_none() {
+                    return match key.code {
+                        KeyCode::Backspace => Some(Action::CategoryFilterParent(*selected)),
+                        KeyCode::Enter => Some(Action::CategoryFilterSelect(*selected)),
+                        _ => None,
+                    };
+                }
+                action
             }
             Mode::CategoryCreateChoice { .. } => keys::handle_category_create_choice(key),
             Mode::CategoryParentPicker { .. } => keys::handle_category_parent_picker(key),
@@ -644,6 +869,27 @@ impl App {
                 }
                 action
             }
+            Mode::ArchivePicker { selected } => {
+                let action = keys::handle_archive_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::ArchiveSelect(*selected));
+                }
+                action
+            }
+            Mode::FilterPicker { selected } => {
+                let action = keys::handle_filter_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::FilterSelect(*selected));
+                }
+                action
+            }
+            Mode::DueDateFilterPicker { selected } => {
+                let action = keys::handle_due_date_filter_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::DueDateFilterSelect(*selected));
+                }
+                action
+            }
             Mode::ConfirmDelete { .. } => keys::handle_confirm_delete(key),
             Mode::DueDateCalendar { prompt_focused, .. } => {
                 keys::handle_due_date_calendar(key, &mut self.input, *prompt_focused)
@@ -652,6 +898,36 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
                 _ => None,
             },
+        }
+    }
+
+    fn popup_list_enter_action(&self) -> Option<Action> {
+        match &self.mode {
+            Mode::Command { selected } => {
+                resolve_command_input(self.input.text(), *selected).map(Action::ExecuteCommand)
+            }
+            Mode::ThemePicker { selected } => Some(Action::ThemeSelect(*selected)),
+            Mode::PriorityPicker { selected } => Some(Action::PrioritySelect(*selected)),
+            Mode::CategoryPicker { selected, target } => {
+                if self.input.is_empty() || matches!(target, CategoryPickerTarget::MoveCategory(_))
+                {
+                    Some(Action::CategorySelect(*selected))
+                } else {
+                    Some(Action::CreateAndAssignCategory(
+                        self.input.text().to_string(),
+                    ))
+                }
+            }
+            Mode::CategoryFilterPicker { selected } => {
+                Some(Action::CategoryFilterSelect(*selected))
+            }
+            Mode::CategoryCreateChoice { .. } => Some(Action::AddCategoryChoice(usize::MAX)),
+            Mode::CategoryParentPicker { .. } => Some(Action::SelectCategoryParent(usize::MAX)),
+            Mode::SortPicker { selected } => Some(Action::SortSelect(*selected)),
+            Mode::ArchivePicker { selected } => Some(Action::ArchiveSelect(*selected)),
+            Mode::FilterPicker { selected } => Some(Action::FilterSelect(*selected)),
+            Mode::DueDateFilterPicker { selected } => Some(Action::DueDateFilterSelect(*selected)),
+            _ => None,
         }
     }
 
@@ -674,7 +950,26 @@ impl App {
                     if *selected > 0 {
                         *selected -= 1;
                     }
-                } else if let Mode::CategoryPicker { ref mut selected } = &mut self.mode {
+                } else if let Mode::ArchivePicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::FilterPicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::DueDateFilterPicker { ref mut selected } = &mut self.mode {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::CategoryPicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                } else if let Mode::CategoryFilterPicker { ref mut selected } = &mut self.mode {
                     if *selected > 0 {
                         *selected -= 1;
                     }
@@ -695,7 +990,7 @@ impl App {
                 } else if self.pane == Pane::Categories {
                     if self.category_index > 0 {
                         self.category_index -= 1;
-                        let cats = self.data.category_entries();
+                        let cats = self.category_entries();
                         self.category_filter = if self.category_index == 0 {
                             None
                         } else {
@@ -709,6 +1004,8 @@ impl App {
                 }
             }
             Action::SelectNext => {
+                let visible_category_count = self.category_entries().len();
+                let picker_category_count = self.categories().len();
                 if let Mode::Command { ref mut selected } = &mut self.mode {
                     let max = get_filtered_commands(self.input.text())
                         .len()
@@ -731,9 +1028,31 @@ impl App {
                     if *selected < max {
                         *selected += 1;
                     }
-                } else if let Mode::CategoryPicker { ref mut selected } = &mut self.mode {
-                    let cats = self.data.categories();
-                    if *selected < cats.len() {
+                } else if let Mode::ArchivePicker { ref mut selected } = &mut self.mode {
+                    let max = 7usize;
+                    if *selected < max {
+                        *selected += 1;
+                    }
+                } else if let Mode::FilterPicker { ref mut selected } = &mut self.mode {
+                    let max = 4usize;
+                    if *selected < max {
+                        *selected += 1;
+                    }
+                } else if let Mode::DueDateFilterPicker { ref mut selected } = &mut self.mode {
+                    let max = 3usize;
+                    if *selected < max {
+                        *selected += 1;
+                    }
+                } else if let Mode::CategoryPicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
+                    if *selected < picker_category_count {
+                        *selected += 1;
+                    }
+                } else if let Mode::CategoryFilterPicker { ref mut selected } = &mut self.mode {
+                    let max = visible_category_count;
+                    if *selected < max {
                         *selected += 1;
                     }
                 } else if let Mode::CategoryCreateChoice {
@@ -754,7 +1073,7 @@ impl App {
                         }
                     }
                 } else if self.pane == Pane::Categories {
-                    let cats = self.data.category_entries();
+                    let cats = self.category_entries();
                     if self.category_index < cats.len() {
                         self.category_index += 1;
                         self.category_filter = cats
@@ -784,6 +1103,45 @@ impl App {
                     self.mode = Mode::Editing { edit_id: Some(id) };
                 }
             }
+            Action::SubmitRename => {
+                let target = if let Mode::RenameInput { target } = &self.mode {
+                    Some(target.clone())
+                } else {
+                    None
+                };
+
+                if let Some(target) = target {
+                    let new_name = self.input.text().trim().to_string();
+                    match target {
+                        RenameTarget::Item(id) => {
+                            if !new_name.is_empty() && self.data.update_text(id, &new_name) {
+                                self.mark_dirty();
+                            }
+                        }
+                        RenameTarget::Category(old_category) => {
+                            if !new_name.is_empty()
+                                && self.data.rename_category(&old_category, &new_name)
+                            {
+                                if self.category_filter.as_deref() == Some(old_category.as_str()) {
+                                    self.category_filter = Some(new_name.clone());
+                                }
+                                if self.pane == Pane::Categories {
+                                    let entries = self.category_entries();
+                                    if let Some(pos) =
+                                        entries.iter().position(|entry| entry.path == new_name)
+                                    {
+                                        self.category_index = pos + 1;
+                                    }
+                                }
+                                self.mark_dirty();
+                            }
+                        }
+                    }
+                }
+                self.input.clear();
+                self.mode = Mode::Normal;
+                self.clamp_selection();
+            }
             Action::SubmitEdit => {
                 let mut created_id = None;
                 if let Mode::Editing { edit_id } = &self.mode {
@@ -797,7 +1155,7 @@ impl App {
                                 self.mark_dirty();
                                 if let Some(ref cat) = self.category_filter {
                                     self.data.set_category(id, Some(cat.clone()));
-                                    let cats = self.data.category_entries();
+                                    let cats = self.category_entries();
                                     if let Some(pos) = cats.iter().position(|c| c.path == *cat) {
                                         self.category_index = pos + 1;
                                     }
@@ -850,7 +1208,6 @@ impl App {
                 if let Mode::Editing { edit_id: None } = &self.mode {
                     if let Some(ref cat) = self.category_filter {
                         if !self
-                            .data
                             .categories()
                             .iter()
                             .any(|category| category_matches(Some(category), cat))
@@ -967,6 +1324,30 @@ impl App {
                     }
                     "archive" => {
                         match arg.as_deref() {
+                            Some("one") => {
+                                if self.pane == Pane::Categories {
+                                    self.set_current_category_archived(true);
+                                } else {
+                                    if let Some(id) =
+                                        self.items().get(self.selected_index()).map(|item| item.id)
+                                    {
+                                        self.data.set_archived(id, true);
+                                        self.mark_dirty();
+                                    }
+                                }
+                                self.mode = Mode::Normal;
+                            }
+                            Some("bulk") | Some("select") => {
+                                self.mode = Mode::MultiSelect {
+                                    cmd: MultiSelectCmd::Archive,
+                                    selected: HashSet::new(),
+                                    selected_categories: HashSet::new(),
+                                };
+                            }
+                            Some("archived") => {
+                                self.show_archived = !self.show_archived;
+                                self.mode = Mode::Normal;
+                            }
                             Some("done") => {
                                 let ids: Vec<u64> = self
                                     .data
@@ -979,25 +1360,46 @@ impl App {
                                     self.data.set_archived(id, true);
                                 }
                                 self.mark_dirty();
+                                self.mode = Mode::Normal;
                             }
                             Some("all") => {
-                                let ids: Vec<u64> =
-                                    self.items().iter().map(|item| item.id).collect();
-                                for id in ids {
-                                    self.data.set_archived(id, true);
+                                self.set_visible_archived(true);
+                                self.mode = Mode::Normal;
+                            }
+                            Some(restore_arg)
+                                if restore_arg == "restore"
+                                    || restore_arg.starts_with("restore ") =>
+                            {
+                                let restore_all = restore_arg == "restore all";
+                                let restore_bulk = restore_arg == "restore bulk"
+                                    || restore_arg == "restore select";
+                                if restore_all {
+                                    self.set_visible_archived(false);
+                                } else if restore_bulk {
+                                    self.show_archived = true;
+                                    self.mode = Mode::MultiSelect {
+                                        cmd: MultiSelectCmd::RestoreArchive,
+                                        selected: HashSet::new(),
+                                        selected_categories: HashSet::new(),
+                                    };
+                                    self.clamp_selection();
+                                    return false;
+                                } else if self.pane == Pane::Categories {
+                                    self.set_current_category_archived(false);
+                                } else {
+                                    if let Some(id) =
+                                        self.items().get(self.selected_index()).map(|item| item.id)
+                                    {
+                                        self.data.set_archived(id, false);
+                                    }
                                 }
                                 self.mark_dirty();
+                                self.mode = Mode::Normal;
                             }
                             _ => {
-                                if let Some(id) =
-                                    self.items().get(self.selected_index()).map(|item| item.id)
-                                {
-                                    self.data.set_archived(id, true);
-                                    self.mark_dirty();
-                                }
+                                self.mode = Mode::ArchivePicker { selected: 0 };
                             }
                         }
-                        self.mode = Mode::Normal;
                         self.clamp_selection();
                     }
                     "archived" => {
@@ -1008,19 +1410,18 @@ impl App {
                     "unarchive" => {
                         match arg.as_deref() {
                             Some("all") => {
-                                let ids: Vec<u64> =
-                                    self.items().iter().map(|item| item.id).collect();
-                                for id in ids {
-                                    self.data.set_archived(id, false);
-                                }
-                                self.mark_dirty();
+                                self.set_visible_archived(false);
                             }
                             _ => {
-                                if let Some(id) =
-                                    self.items().get(self.selected_index()).map(|item| item.id)
-                                {
-                                    self.data.set_archived(id, false);
-                                    self.mark_dirty();
+                                if self.pane == Pane::Categories {
+                                    self.set_current_category_archived(false);
+                                } else {
+                                    if let Some(id) =
+                                        self.items().get(self.selected_index()).map(|item| item.id)
+                                    {
+                                        self.data.set_archived(id, false);
+                                        self.mark_dirty();
+                                    }
                                 }
                             }
                         }
@@ -1047,28 +1448,87 @@ impl App {
                                 }
                                 self.mark_dirty();
                             }
-                        }
-                        self.mode = Mode::Normal;
-                        self.clamp_selection();
-                    }
-                    "move" | "m" => {
-                        if let Some(category) = arg.and_then(|name| normalize_category(&name)) {
-                            if let Some(id) =
-                                self.items().get(self.selected_index()).map(|item| item.id)
-                            {
-                                self.data.add_category(&category);
-                                self.data.set_category(id, Some(category.clone()));
-                                self.category_filter = Some(category.clone());
-                                let cats = self.data.category_entries();
-                                if let Some(pos) = cats.iter().position(|cat| cat.path == category)
-                                {
-                                    self.category_index = pos + 1;
+                            self.mode = Mode::Normal;
+                        } else {
+                            let rename_target = if self.pane == Pane::Categories {
+                                let entries = self.category_entries();
+                                if self.category_index > 0 {
+                                    entries
+                                        .get(self.category_index - 1)
+                                        .map(|e| RenameTarget::Category(e.path.clone()))
+                                } else {
+                                    None
                                 }
-                                self.mark_dirty();
+                            } else {
+                                self.items()
+                                    .get(self.selected_index())
+                                    .map(|item| RenameTarget::Item(item.id))
+                            };
+                            if let Some(target) = rename_target {
+                                self.input.clear();
+                                match &target {
+                                    RenameTarget::Item(id) => {
+                                        if let Some(item) = self.data.get(*id) {
+                                            self.input.insert_str(&item.text);
+                                        }
+                                    }
+                                    RenameTarget::Category(name) => {
+                                        self.input.insert_str(name);
+                                    }
+                                }
+                                self.mode = Mode::RenameInput { target };
+                            } else {
+                                self.mode = Mode::Normal;
                             }
                         }
-                        self.mode = Mode::Normal;
                         self.clamp_selection();
+                    }
+                    "filter" => match arg.as_deref() {
+                        Some("due") => {
+                            self.mode = Mode::DueDateFilterPicker { selected: 0 };
+                        }
+                        Some("priority") => {
+                            self.mode = Mode::PriorityPicker { selected: 0 };
+                        }
+                        Some("category") => {
+                            self.mode = Mode::CategoryFilterPicker { selected: 0 };
+                        }
+                        Some("archived") => {
+                            self.show_archived = !self.show_archived;
+                            self.mode = Mode::Normal;
+                            self.clamp_selection();
+                        }
+                        Some("clear") => {
+                            self.due_filter = None;
+                            self.priority_filter = None;
+                            self.category_filter = None;
+                            self.category_index = 0;
+                            self.show_archived = false;
+                            self.sort_mode = SortMode::Default;
+                            self.mode = Mode::Normal;
+                            self.clamp_selection();
+                        }
+                        _ => {
+                            self.mode = Mode::FilterPicker { selected: 0 };
+                        }
+                    },
+                    "move" | "m" => {
+                        if self.pane == Pane::Categories {
+                            if let Some(category) = self.selected_category_path() {
+                                self.input.clear();
+                                self.mode = Mode::CategoryPicker {
+                                    selected: 0,
+                                    target: CategoryPickerTarget::MoveCategory(category),
+                                };
+                            } else {
+                                self.mode = Mode::Normal;
+                            }
+                        } else {
+                            self.mode = Mode::CategoryPicker {
+                                selected: 0,
+                                target: CategoryPickerTarget::AssignItem,
+                            };
+                        }
                     }
                     "themes" => {
                         self.mode = Mode::ThemePicker { selected: 0 };
@@ -1083,7 +1543,7 @@ impl App {
                         self.mode = Mode::Keybindings;
                     }
                     "categories" | "cat" => {
-                        self.mode = Mode::CategoryPicker { selected: 0 };
+                        self.mode = Mode::CategoryFilterPicker { selected: 0 };
                     }
                     "sort" => match arg.as_deref() {
                         Some("priority") => {
@@ -1108,7 +1568,9 @@ impl App {
                 }
                 self.completions.clear();
                 self.completion_index = 0;
-                self.input.clear();
+                if !matches!(self.mode, Mode::RenameInput { .. }) {
+                    self.input.clear();
+                }
                 self.clamp_selection();
             }
             Action::ToggleMultiSelect(id) => {
@@ -1136,35 +1598,56 @@ impl App {
                 let Mode::MultiSelect { cmd, .. } = &self.mode else {
                     return false;
                 };
-                if *cmd != MultiSelectCmd::Delete {
+
+                if *cmd == MultiSelectCmd::Delete {
+                    let (ids, category_names) = if self.pane == Pane::Categories {
+                        (
+                            self.data.items().iter().map(|item| item.id).collect(),
+                            self.categories(),
+                        )
+                    } else {
+                        let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+                        (ids, Vec::new())
+                    };
+
+                    let mut texts: Vec<String> = ids
+                        .iter()
+                        .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
+                        .collect();
+                    texts.extend(
+                        category_names
+                            .iter()
+                            .map(|category| format!("[category] {category}")),
+                    );
+                    if !ids.is_empty() || !category_names.is_empty() {
+                        self.mode = Mode::ConfirmDelete {
+                            ids,
+                            texts,
+                            category_names,
+                        };
+                    }
                     return false;
                 }
 
-                let (ids, category_names) = if self.pane == Pane::Categories {
-                    (
-                        self.data.items().iter().map(|item| item.id).collect(),
-                        self.data.categories(),
-                    )
+                let ids: HashSet<u64> = if self.pane == Pane::Categories {
+                    HashSet::new()
                 } else {
-                    let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
-                    (ids, Vec::new())
+                    self.items().iter().map(|item| item.id).collect()
+                };
+                let selected_categories: HashSet<String> = if self.pane == Pane::Categories {
+                    self.categories().into_iter().collect()
+                } else {
+                    HashSet::new()
                 };
 
-                let mut texts: Vec<String> = ids
-                    .iter()
-                    .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
-                    .collect();
-                texts.extend(
-                    category_names
-                        .iter()
-                        .map(|category| format!("[category] {category}")),
-                );
-                if !ids.is_empty() || !category_names.is_empty() {
-                    self.mode = Mode::ConfirmDelete {
-                        ids,
-                        texts,
-                        category_names,
-                    };
+                if let Mode::MultiSelect {
+                    selected,
+                    selected_categories: categories,
+                    ..
+                } = &mut self.mode
+                {
+                    *selected = ids;
+                    *categories = selected_categories;
                 }
             }
             Action::ConfirmMultiSelect => {
@@ -1205,10 +1688,27 @@ impl App {
                             }
                             self.mark_dirty();
                         }
+                        MultiSelectCmd::Archive => {
+                            for id in &selected {
+                                self.data.set_archived(*id, true);
+                            }
+                            for category in &selected_categories {
+                                self.data.set_category_archived(category, true);
+                            }
+                            self.mark_dirty();
+                        }
+                        MultiSelectCmd::RestoreArchive => {
+                            for id in &selected {
+                                self.data.set_archived(*id, false);
+                            }
+                            for category in &selected_categories {
+                                self.data.set_category_archived(category, false);
+                            }
+                            self.mark_dirty();
+                        }
                     }
                     if let Some(ref cat) = self.category_filter {
                         if !self
-                            .data
                             .categories()
                             .iter()
                             .any(|category| category_matches(Some(category), cat))
@@ -1284,6 +1784,161 @@ impl App {
             }
             Action::CancelPriorityPicker => {
                 self.mode = Mode::Normal;
+            }
+            Action::FilterSelect(idx) => {
+                self.mode = Mode::Normal;
+                match idx {
+                    0 => {
+                        self.show_archived = !self.show_archived;
+                        self.clamp_selection();
+                    }
+                    1 => {
+                        self.mode = Mode::CategoryFilterPicker { selected: 0 };
+                    }
+                    2 => {
+                        self.mode = Mode::DueDateFilterPicker { selected: 0 };
+                    }
+                    3 => {
+                        self.mode = Mode::PriorityPicker { selected: 0 };
+                    }
+                    4 => {
+                        self.due_filter = None;
+                        self.priority_filter = None;
+                        self.category_filter = None;
+                        self.category_index = 0;
+                        self.show_archived = false;
+                        self.sort_mode = SortMode::Default;
+                        self.clamp_selection();
+                    }
+                    _ => {}
+                }
+            }
+            Action::ArchiveSelect(idx) => {
+                match idx {
+                    0 => {
+                        self.mode = Mode::MultiSelect {
+                            cmd: MultiSelectCmd::Archive,
+                            selected: HashSet::new(),
+                            selected_categories: HashSet::new(),
+                        };
+                        return false;
+                    }
+                    1 => {
+                        let ids: Vec<u64> = self
+                            .data
+                            .items()
+                            .iter()
+                            .filter(|item| item.done && !item.archived)
+                            .map(|item| item.id)
+                            .collect();
+                        for id in ids {
+                            self.data.set_archived(id, true);
+                        }
+                        self.mark_dirty();
+                    }
+                    2 => {
+                        if self.pane == Pane::Categories {
+                            self.set_current_category_archived(true);
+                        } else {
+                            if let Some(id) =
+                                self.items().get(self.selected_index()).map(|item| item.id)
+                            {
+                                self.data.set_archived(id, true);
+                                self.mark_dirty();
+                            }
+                        }
+                    }
+                    3 => {
+                        self.set_visible_archived(true);
+                    }
+                    4 => {
+                        self.show_archived = !self.show_archived;
+                    }
+                    5 => {
+                        self.show_archived = true;
+                        self.mode = Mode::MultiSelect {
+                            cmd: MultiSelectCmd::RestoreArchive,
+                            selected: HashSet::new(),
+                            selected_categories: HashSet::new(),
+                        };
+                        return false;
+                    }
+                    6 => {
+                        if self.pane == Pane::Categories {
+                            self.set_current_category_archived(false);
+                        } else {
+                            if let Some(id) =
+                                self.items().get(self.selected_index()).map(|item| item.id)
+                            {
+                                self.data.set_archived(id, false);
+                                self.mark_dirty();
+                            }
+                        }
+                    }
+                    7 => {
+                        self.set_visible_archived(false);
+                    }
+                    _ => {}
+                }
+                self.mode = Mode::Normal;
+                self.clamp_selection();
+            }
+            Action::CancelArchivePicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::CancelFilterPicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::DueDateFilterSelect(idx) => {
+                const DUE_OPTIONS: [Option<DueFilter>; 4] = [
+                    Some(DueFilter::Overdue),
+                    Some(DueFilter::Week),
+                    Some(DueFilter::Today),
+                    None,
+                ];
+                self.due_filter = DUE_OPTIONS[idx];
+                self.mode = Mode::Normal;
+                self.clamp_selection();
+            }
+            Action::CancelDueDateFilterPicker => {
+                self.mode = Mode::Normal;
+            }
+            Action::PopupBack => {
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                self.mode = match mode {
+                    Mode::CategoryFilterPicker { selected } => {
+                        let parent_idx = self.parent_category_index_for(selected);
+                        if parent_idx != selected {
+                            Mode::CategoryFilterPicker {
+                                selected: parent_idx,
+                            }
+                        } else {
+                            Mode::FilterPicker { selected: 2 }
+                        }
+                    }
+                    Mode::DueDateFilterPicker { .. } => Mode::FilterPicker { selected: 0 },
+                    Mode::PriorityPicker { .. } => Mode::FilterPicker { selected: 1 },
+                    Mode::CategoryCreateChoice { parent, name, .. } => {
+                        self.input.set_text(&name);
+                        Mode::CategoryAdd { parent }
+                    }
+                    Mode::CategoryParentPicker { name, .. } => Mode::CategoryCreateChoice {
+                        selected: 0,
+                        parent: None,
+                        name,
+                    },
+                    Mode::ThemePicker { .. }
+                    | Mode::CategoryPicker { .. }
+                    | Mode::SortPicker { .. }
+                    | Mode::ArchivePicker { .. }
+                    | Mode::FilterPicker { .. } => {
+                        self.input.clear();
+                        self.completions.clear();
+                        self.completion_index = 0;
+                        Mode::Command { selected: 0 }
+                    }
+                    other => other,
+                };
             }
             Action::Copy => {
                 if let Some(text) = self.input.selected_text() {
@@ -1448,36 +2103,65 @@ impl App {
                 };
             }
             Action::OpenCategoryPicker => {
-                self.mode = Mode::CategoryPicker { selected: 0 };
+                self.mode = Mode::CategoryPicker {
+                    selected: 0,
+                    target: CategoryPickerTarget::AssignItem,
+                };
             }
             Action::CategorySelect(idx) => {
-                let cats = self.data.categories();
-                let opened_from_picker = matches!(self.mode, Mode::CategoryPicker { .. });
-                if opened_from_picker {
-                    let items = self.items();
-                    let id = items.get(self.selected_index()).map(|i| i.id);
-                    if let Some(id) = id {
-                        let category = if idx == 0 {
-                            None
-                        } else {
-                            cats.get(idx - 1).cloned()
-                        };
-                        self.data.set_category(id, category);
-                        self.mark_dirty();
+                let picker_target = match &self.mode {
+                    Mode::CategoryPicker { target, .. } => Some(target.clone()),
+                    _ => None,
+                };
+                if let Some(target) = picker_target {
+                    let cats = self.categories();
+                    match target {
+                        CategoryPickerTarget::AssignItem => {
+                            let items = self.items();
+                            let id = items.get(self.selected_index()).map(|i| i.id);
+                            if let Some(id) = id {
+                                let category = if idx == 0 {
+                                    None
+                                } else {
+                                    cats.get(idx - 1).cloned()
+                                };
+                                self.data.set_category(id, category);
+                                self.mark_dirty();
+                            }
+                        }
+                        CategoryPickerTarget::MoveCategory(old_category) => {
+                            let destination = if idx == 0 {
+                                None
+                            } else {
+                                cats.get(idx - 1).map(String::as_str)
+                            };
+                            self.move_category_to(&old_category, destination);
+                        }
                     }
                     self.mode = Mode::Normal;
                 } else {
-                    if idx == 0 {
-                        self.category_filter = None;
-                        self.category_index = 0;
-                    } else if let Some(cat) = self.data.category_entries().get(idx - 1) {
-                        self.category_filter = Some(cat.path.clone());
-                        self.category_index = idx;
-                    }
+                    self.set_category_index(idx);
                     self.pane = Pane::Items;
                     self.mode = Mode::Normal;
-                    self.clamp_selection();
                 }
+            }
+            Action::CategoryFilterSelect(idx) => {
+                self.set_category_index(idx);
+                self.pane = Pane::Items;
+                self.mode = Mode::Normal;
+            }
+            Action::CategoryFilterParent(idx) => {
+                self.mode = Mode::CategoryFilterPicker {
+                    selected: self.parent_category_index_for(idx),
+                };
+            }
+            Action::CategoryParent => {
+                let parent_idx = self.parent_category_index();
+                if parent_idx != self.category_index {
+                    self.set_category_index(parent_idx);
+                    self.pane = Pane::Items;
+                }
+                self.mode = Mode::Normal;
             }
             Action::AddCategory(name) => {
                 if let Some(normalized) = normalize_category(&name) {
@@ -1614,7 +2298,7 @@ impl App {
             }
             Action::SortSelect(idx) => {
                 const SORTS: [SortMode; 3] =
-                    [SortMode::Priority, SortMode::DueDate, SortMode::Default];
+                    [SortMode::Default, SortMode::DueDate, SortMode::Priority];
                 if let Some(&mode) = SORTS.get(idx) {
                     self.sort_mode = mode;
                 }
@@ -1640,7 +2324,7 @@ impl App {
 }
 
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("archive", "Archive selected/done/all visible"),
+    ("archive", "Archive items/categories (done, all, restore)"),
     ("archived", "Toggle archived view"),
     ("clear", "Clear completed items"),
     ("c", "Alias for clear"),
@@ -1648,11 +2332,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("done", "Bulk toggle done"),
     ("due", "Filter due dates"),
     ("d", "Alias for delete"),
+    ("filter", "Filter items (due, priority, category, archived)"),
     ("help", "Show help"),
     ("keybindings", "Show keybindings"),
+    ("k", "Alias for keybindings"),
     ("categories", "Filter by category"),
     ("cat", "Alias for categories"),
-    ("move", "Move selected item to category"),
+    ("move", "Move selected item/category"),
     ("m", "Alias for move"),
     ("priorities", "Filter by priority"),
     ("p", "Alias for priorities"),
@@ -1665,48 +2351,152 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("x", "Alias for done"),
 ];
 
-pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
-    let lower = prefix.to_lowercase();
-    get_command_list()
-        .into_iter()
-        .filter(|(name, _)| name.starts_with(&lower))
-        .collect()
-}
+const VISIBLE_COMMANDS: &[(&str, &str)] = &[
+    ("archive", "Archive or restore items/categories"),
+    ("archive bulk", "Bulk-select items/categories to archive"),
+    ("archive done", "Archive completed items"),
+    ("archive one", "Archive selected item/category"),
+    ("archive all", "Archive all visible items/categories"),
+    ("archive archived", "Toggle archived view"),
+    (
+        "archive restore bulk",
+        "Bulk-select archived items/categories to restore",
+    ),
+    ("archive restore", "Restore selected archived item/category"),
+    (
+        "archive restore all",
+        "Restore all visible archived items/categories",
+    ),
+    ("clear", "Clear completed items"),
+    ("delete", "Bulk delete items/categories"),
+    ("done", "Bulk toggle done"),
+    ("filter", "Filter items"),
+    ("filter archived", "Toggle archived view"),
+    ("filter category", "Open category filter picker"),
+    ("filter due", "Open due-date filter picker"),
+    ("filter priority", "Open priority filter picker"),
+    ("filter clear", "Clear all filters"),
+    ("help", "Show help"),
+    ("keybindings", "Show keybindings"),
+    ("move", "Move selected item/category"),
+    ("rename", "Rename category path"),
+    ("search", "Filter items by text"),
+    ("sort", "Sort items"),
+    ("sort default", "Restore default sort"),
+    ("sort due", "Sort by due date"),
+    ("sort priority", "Sort by priority"),
+    ("themes", "List available themes"),
+];
 
-pub fn get_command_list() -> Vec<(&'static str, &'static str)> {
-    COMMANDS
+pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
+    let lower = prefix.trim().to_lowercase();
+    let subcommand_context = contains_whitespace(prefix);
+
+    VISIBLE_COMMANDS
         .iter()
-        .filter(|(name, _)| !matches!(*name, "s" | "d" | "x" | "c" | "p" | "k" | "cat" | "m"))
+        .filter(|(name, _)| {
+            let is_subcommand = contains_whitespace(name);
+            if lower.is_empty() {
+                !is_subcommand
+            } else if subcommand_context {
+                is_subcommand && name.starts_with(&lower)
+            } else {
+                !is_subcommand && name.starts_with(&lower)
+            }
+        })
         .copied()
         .collect()
 }
 
 fn get_completions(prefix: &str) -> Vec<String> {
-    let lower = prefix.to_lowercase();
-    let mut matches: Vec<&str> = COMMANDS
+    get_filtered_commands(prefix)
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+fn resolve_command_input(input: &str, selected: usize) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        let matches = get_filtered_commands(input);
+        if matches.is_empty() {
+            return None;
+        }
+        let idx = selected.min(matches.len().saturating_sub(1));
+        return Some(matches[idx].0.to_string());
+    }
+
+    let lower = trimmed.to_lowercase();
+    let has_trailing_space = ends_with_whitespace(input);
+    let first = lower.split_whitespace().next().unwrap_or_default();
+    let has_args = lower.split_whitespace().nth(1).is_some();
+    let exact_visible = VISIBLE_COMMANDS.iter().any(|(name, _)| *name == lower);
+
+    if !has_trailing_space && (exact_visible || (has_args && is_known_command(first))) {
+        return Some(trimmed.to_string());
+    }
+
+    let matches = get_filtered_commands(input);
+    if !matches.is_empty() {
+        let idx = selected.min(matches.len().saturating_sub(1));
+        return Some(matches[idx].0.to_string());
+    }
+
+    if is_known_command(first) {
+        return Some(trimmed.to_string());
+    }
+
+    None
+}
+
+fn is_known_command(name: &str) -> bool {
+    COMMANDS
         .iter()
-        .filter_map(|(name, _)| {
-            if name.starts_with(&lower) {
-                Some(*name)
-            } else {
-                None
-            }
-        })
-        .collect();
-    matches.sort();
-    matches.dedup();
-    matches.into_iter().map(|s| s.to_string()).collect()
+        .any(|(command, _)| command.eq_ignore_ascii_case(name))
+}
+
+fn contains_whitespace(value: &str) -> bool {
+    value.chars().any(char::is_whitespace)
+}
+
+fn ends_with_whitespace(value: &str) -> bool {
+    value.chars().last().is_some_and(char::is_whitespace)
+}
+
+fn is_keybindings_shortcut(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('_'))
+}
+
+fn is_popup_list_mode(mode: &Mode) -> bool {
+    matches!(
+        mode,
+        Mode::ThemePicker { .. }
+            | Mode::PriorityPicker { .. }
+            | Mode::CategoryPicker { .. }
+            | Mode::CategoryFilterPicker { .. }
+            | Mode::CategoryCreateChoice { .. }
+            | Mode::CategoryParentPicker { .. }
+            | Mode::SortPicker { .. }
+            | Mode::ArchivePicker { .. }
+            | Mode::FilterPicker { .. }
+            | Mode::DueDateFilterPicker { .. }
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use super::{Action, App, Mode, MultiSelectCmd, Pane, SortMode};
+    use super::{
+        get_filtered_commands, resolve_command_input, Action, App, CategoryPickerTarget, Mode,
+        MultiSelectCmd, Pane, RenameTarget, SortMode,
+    };
     use crate::clip::Clipboard;
     use crate::data::TodoData;
     use crate::ui::input::InputBuffer;
     use crate::ui::theme::Theme;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn test_app(data: TodoData) -> App {
         App {
@@ -1791,5 +2581,769 @@ mod tests {
 
         assert!(app.data.items().is_empty());
         assert!(app.data.categories().contains(&"Work/work1".to_string()));
+    }
+
+    #[test]
+    fn rename_command_targets_selected_item_in_items_pane() {
+        let mut data = TodoData::new();
+        let id = data.add("old item");
+        let mut app = test_app(data);
+        app.pane = Pane::Items;
+
+        app.handle_action(Action::ExecuteCommand("rename".to_string()));
+        assert!(matches!(
+            app.mode,
+            Mode::RenameInput {
+                target: RenameTarget::Item(target_id)
+            } if target_id == id
+        ));
+        assert_eq!(app.input.text(), "old item");
+
+        app.input.set_text("new item");
+        app.handle_action(Action::SubmitRename);
+        assert_eq!(
+            app.data.get(id).map(|item| item.text.as_str()),
+            Some("new item")
+        );
+    }
+
+    #[test]
+    fn rename_command_targets_highlighted_category_in_category_pane() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.category_index = 1;
+
+        app.handle_action(Action::ExecuteCommand("rename".to_string()));
+        assert!(matches!(
+            app.mode,
+            Mode::RenameInput {
+                target: RenameTarget::Category(ref category)
+            } if category == "Work"
+        ));
+
+        app.input.set_text("Office");
+        app.handle_action(Action::SubmitRename);
+        assert_eq!(
+            app.data.get(id).and_then(|item| item.category.as_deref()),
+            Some("Office/api")
+        );
+    }
+
+    #[test]
+    fn move_command_from_items_pane_targets_selected_item() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.add_category("Work");
+        let mut app = test_app(data);
+        app.pane = Pane::Items;
+
+        app.handle_action(Action::ExecuteCommand("move".to_string()));
+        assert!(matches!(
+            app.mode,
+            Mode::CategoryPicker {
+                target: CategoryPickerTarget::AssignItem,
+                ..
+            }
+        ));
+
+        app.handle_action(Action::CategorySelect(1));
+        assert_eq!(
+            app.data.get(id).and_then(|item| item.category.as_deref()),
+            Some("Work")
+        );
+    }
+
+    #[test]
+    fn move_command_from_category_pane_targets_highlighted_category() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        data.add_category("Personal");
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.category_index = app
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work" && entry.depth == 0)
+            .map(|idx| idx + 1)
+            .unwrap();
+
+        app.handle_action(Action::ExecuteCommand("move".to_string()));
+        assert!(matches!(
+            app.mode,
+            Mode::CategoryPicker {
+                target: CategoryPickerTarget::MoveCategory(ref category),
+                ..
+            } if category == "Work"
+        ));
+
+        let destination_idx = app
+            .categories()
+            .iter()
+            .position(|category| category == "Personal")
+            .map(|idx| idx + 1)
+            .unwrap();
+        app.handle_action(Action::CategorySelect(destination_idx));
+
+        assert_eq!(
+            app.data.get(id).and_then(|item| item.category.as_deref()),
+            Some("Personal/Work/api")
+        );
+        assert!(app
+            .data
+            .categories()
+            .contains(&"Personal/Work/api".to_string()));
+    }
+
+    #[test]
+    fn move_category_to_root_keeps_leaf_name() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.category_index = app
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work/api")
+            .map(|idx| idx + 1)
+            .unwrap();
+
+        app.handle_action(Action::ExecuteCommand("move".to_string()));
+        app.handle_action(Action::CategorySelect(0));
+
+        assert_eq!(
+            app.data.get(id).and_then(|item| item.category.as_deref()),
+            Some("api")
+        );
+        assert!(app.data.categories().contains(&"api".to_string()));
+    }
+
+    #[test]
+    fn archive_one_archives_selected_item() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        let mut app = test_app(data);
+
+        app.handle_action(Action::ExecuteCommand("archive one".to_string()));
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(true));
+    }
+
+    #[test]
+    fn archive_bulk_opens_bulk_archive_multiselect() {
+        let data = TodoData::new();
+        let mut app = test_app(data);
+
+        app.handle_action(Action::ExecuteCommand("archive bulk".to_string()));
+
+        assert!(matches!(
+            app.mode,
+            Mode::MultiSelect {
+                cmd: MultiSelectCmd::Archive,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn archive_select_alias_still_opens_bulk_archive_multiselect() {
+        let data = TodoData::new();
+        let mut app = test_app(data);
+
+        app.handle_action(Action::ExecuteCommand("archive select".to_string()));
+
+        assert!(matches!(
+            app.mode,
+            Mode::MultiSelect {
+                cmd: MultiSelectCmd::Archive,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn archive_restore_bulk_opens_restore_archive_multiselect() {
+        let data = TodoData::new();
+        let mut app = test_app(data);
+
+        app.handle_action(Action::ExecuteCommand("archive restore bulk".to_string()));
+
+        assert!(app.show_archived);
+        assert!(matches!(
+            app.mode,
+            Mode::MultiSelect {
+                cmd: MultiSelectCmd::RestoreArchive,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn restore_archive_multiselect_restores_selected_items() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_archived(id, true);
+        let mut app = test_app(data);
+        app.show_archived = true;
+        app.mode = Mode::MultiSelect {
+            cmd: MultiSelectCmd::RestoreArchive,
+            selected: [id].into_iter().collect(),
+            selected_categories: Default::default(),
+        };
+
+        app.handle_action(Action::ConfirmMultiSelect);
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(false));
+    }
+
+    #[test]
+    fn archive_one_from_category_pane_archives_category_branch() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        data.add_category("Work/docs");
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.category_index = app
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work" && entry.depth == 0)
+            .map(|idx| idx + 1)
+            .unwrap();
+
+        app.handle_action(Action::ExecuteCommand("archive one".to_string()));
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(true));
+        assert!(app.data.categories().is_empty());
+        assert!(app
+            .data
+            .categories_for_archived(true)
+            .contains(&"Work/docs".to_string()));
+    }
+
+    #[test]
+    fn archive_all_from_all_category_archives_items_and_categories() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        data.add_category("Personal");
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.category_index = 0;
+
+        app.handle_action(Action::ExecuteCommand("archive all".to_string()));
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(true));
+        assert!(app.data.categories().is_empty());
+        assert!(app
+            .data
+            .categories_for_archived(true)
+            .contains(&"Personal".to_string()));
+    }
+
+    #[test]
+    fn archive_bulk_from_category_pane_archives_selected_categories() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        data.add_category("Personal");
+        let mut app = test_app(data);
+        app.pane = Pane::Categories;
+        app.mode = Mode::MultiSelect {
+            cmd: MultiSelectCmd::Archive,
+            selected: Default::default(),
+            selected_categories: ["Work".to_string()].into_iter().collect(),
+        };
+
+        app.handle_action(Action::ConfirmMultiSelect);
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(true));
+        assert!(!app.data.categories().contains(&"Work/api".to_string()));
+        assert!(app.data.categories().contains(&"Personal".to_string()));
+    }
+
+    #[test]
+    fn restore_archive_bulk_from_category_pane_restores_selected_categories() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.set_category(id, Some("Work/api".to_string()));
+        data.add_category("Work/docs");
+        data.set_category_archived("Work", true);
+        let mut app = test_app(data);
+        app.show_archived = true;
+        app.pane = Pane::Categories;
+        app.mode = Mode::MultiSelect {
+            cmd: MultiSelectCmd::RestoreArchive,
+            selected: Default::default(),
+            selected_categories: ["Work".to_string()].into_iter().collect(),
+        };
+
+        app.handle_action(Action::ConfirmMultiSelect);
+
+        assert_eq!(app.data.get(id).map(|item| item.archived), Some(false));
+        assert!(app.data.categories().contains(&"Work/docs".to_string()));
+        assert!(!app
+            .data
+            .categories_for_archived(true)
+            .contains(&"Work/docs".to_string()));
+    }
+
+    #[test]
+    fn filter_category_opens_filter_picker_not_assignment_picker() {
+        let mut data = TodoData::new();
+        data.add_category("Work");
+        let mut app = test_app(data);
+
+        app.handle_action(Action::ExecuteCommand("filter category".to_string()));
+
+        assert!(matches!(app.mode, Mode::CategoryFilterPicker { .. }));
+    }
+
+    #[test]
+    fn filter_picker_category_opens_filter_picker_not_assignment_picker() {
+        let mut data = TodoData::new();
+        data.add_category("Work");
+        let mut app = test_app(data);
+
+        app.handle_action(Action::FilterSelect(1));
+
+        assert!(matches!(app.mode, Mode::CategoryFilterPicker { .. }));
+    }
+
+    #[test]
+    fn category_filter_picker_filters_without_assigning_item() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        data.add_category("Work");
+        let mut app = test_app(data);
+        app.mode = Mode::CategoryFilterPicker { selected: 0 };
+
+        app.handle_action(Action::CategoryFilterSelect(1));
+
+        assert_eq!(app.category_filter.as_deref(), Some("Work"));
+        assert_eq!(
+            app.data.get(id).and_then(|item| item.category.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn category_filter_picker_jumps_to_selected_category_and_shows_only_that_branch() {
+        let mut data = TodoData::new();
+        let work_id = data.add("work task");
+        data.set_category(work_id, Some("Work/api".to_string()));
+        let personal_id = data.add("personal task");
+        data.set_category(personal_id, Some("Personal".to_string()));
+        let mut app = test_app(data);
+        let work_idx = app
+            .data
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work")
+            .map(|idx| idx + 1)
+            .unwrap();
+
+        app.handle_action(Action::CategoryFilterSelect(work_idx));
+
+        let visible: Vec<String> = app.items().into_iter().map(|item| item.text).collect();
+        assert_eq!(app.category_index, work_idx);
+        assert_eq!(app.category_filter.as_deref(), Some("Work"));
+        assert_eq!(visible, vec!["work task"]);
+    }
+
+    #[test]
+    fn backspace_from_nested_category_filter_moves_to_parent() {
+        let mut data = TodoData::new();
+        data.add_category("Work/api");
+        let mut app = test_app(data);
+        let child_idx = app
+            .data
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work/api")
+            .map(|idx| idx + 1)
+            .unwrap();
+
+        app.handle_action(Action::CategoryFilterSelect(child_idx));
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.category_filter.as_deref(), Some("Work"));
+        assert_eq!(app.data.category_entries()[app.category_index - 1].depth, 0);
+    }
+
+    #[test]
+    fn backspace_in_category_filter_popup_moves_step_by_step_to_command_list() {
+        let mut data = TodoData::new();
+        data.add_category("Work/api");
+        let mut app = test_app(data);
+        let child_idx = app
+            .data
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work/api")
+            .map(|idx| idx + 1)
+            .unwrap();
+        app.mode = Mode::CategoryFilterPicker {
+            selected: child_idx,
+        };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(
+            app.mode,
+            Mode::CategoryFilterPicker { selected: 1 }
+        ));
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(
+            app.mode,
+            Mode::CategoryFilterPicker { selected: 0 }
+        ));
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(app.mode, Mode::FilterPicker { selected: 2 }));
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn left_arrow_in_category_filter_popup_moves_one_step_back() {
+        let mut data = TodoData::new();
+        data.add_category("Work/api");
+        let mut app = test_app(data);
+        let child_idx = app
+            .data
+            .category_entries()
+            .iter()
+            .position(|entry| entry.path == "Work/api")
+            .map(|idx| idx + 1)
+            .unwrap();
+        app.mode = Mode::CategoryFilterPicker {
+            selected: child_idx,
+        };
+
+        if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)) {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(
+            app.mode,
+            Mode::CategoryFilterPicker { selected: 1 }
+        ));
+    }
+
+    #[test]
+    fn left_arrow_in_root_popup_returns_to_initial_command_list() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::ArchivePicker { selected: 0 };
+
+        if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)) {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn right_arrow_in_popup_list_behaves_like_enter() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::SortPicker { selected: 1 };
+
+        if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)) {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.sort_mode, SortMode::DueDate);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn right_arrow_in_command_popup_behaves_like_enter() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Command { selected: 0 };
+        app.input.insert_str("keyb");
+
+        if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)) {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(app.mode, Mode::Keybindings));
+    }
+
+    #[test]
+    fn left_arrow_in_command_popup_returns_to_initial_command_list() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Command { selected: 0 };
+        app.input.insert_str("keyb");
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+        assert!(action.is_none());
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn backspace_at_initial_command_list_stops_there() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Command { selected: 0 };
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert!(action.is_none());
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn left_arrow_at_initial_command_list_stops_there() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Command { selected: 0 };
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+        assert!(action.is_none());
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+        assert!(get_filtered_commands(app.input.text())
+            .iter()
+            .all(|(name, _)| !name.contains(' ')));
+    }
+
+    #[test]
+    fn backspace_in_filter_subpicker_returns_to_filter_popup() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::DueDateFilterPicker { selected: 1 };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(app.mode, Mode::FilterPicker { selected: 0 }));
+    }
+
+    #[test]
+    fn backspace_at_initial_filter_popup_returns_to_initial_command_list() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::FilterPicker { selected: 0 };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn backspace_in_root_popup_returns_to_initial_command_list() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::ArchivePicker { selected: 0 };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_previous_word_in_text_prompt() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Editing { edit_id: None };
+        app.input.insert_str("hello world");
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
+
+        assert!(action.is_none());
+        assert_eq!(app.input.text(), "hello ");
+    }
+
+    #[test]
+    fn terminal_ctrl_backspace_encoding_deletes_previous_word_in_text_prompt() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Editing { edit_id: None };
+        app.input.insert_str("hello world");
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+
+        assert!(action.is_none());
+        assert_eq!(app.input.text(), "hello ");
+    }
+
+    #[test]
+    fn get_filtered_commands_matches_filter_command() {
+        let results = get_filtered_commands("filter");
+        assert!(!results.is_empty(), "filter should match");
+        assert!(
+            results.iter().any(|(n, _)| *n == "filter"),
+            "should contain filter"
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_matches_archive_command() {
+        let results = get_filtered_commands("archive");
+        assert!(!results.is_empty(), "archive should match");
+        assert!(
+            results.iter().any(|(n, _)| *n == "archive"),
+            "should contain archive"
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_shows_archive_subcommands_after_space() {
+        let results = get_filtered_commands("archive ");
+        let names: Vec<&str> = results.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "archive bulk",
+                "archive done",
+                "archive one",
+                "archive all",
+                "archive archived",
+                "archive restore bulk",
+                "archive restore",
+                "archive restore all"
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_command_input_executes_selected_partial_command() {
+        assert_eq!(
+            resolve_command_input("arch", 0),
+            Some("archive".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_command_input_executes_selected_command_when_input_is_empty() {
+        assert_eq!(resolve_command_input("", 1), Some("clear".to_string()));
+    }
+
+    #[test]
+    fn resolve_command_input_preserves_argument_commands() {
+        assert_eq!(
+            resolve_command_input("search Work task", 0),
+            Some("search Work task".to_string())
+        );
+        assert_eq!(
+            resolve_command_input("rename Work Office", 0),
+            Some("rename Work Office".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_command_input_executes_selected_subcommand_after_space() {
+        assert_eq!(
+            resolve_command_input("archive ", 1),
+            Some("archive done".to_string())
+        );
+        assert_eq!(
+            resolve_command_input("filter ", 4),
+            Some("filter clear".to_string())
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_shows_regular_commands() {
+        let results = get_filtered_commands("");
+        assert!(
+            results.iter().any(|(n, _)| *n == "help"),
+            "should contain regular commands"
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_groups_archive_commands() {
+        let results = get_filtered_commands("");
+        let names: Vec<&str> = results.iter().map(|(name, _)| *name).collect();
+        assert!(names.contains(&"archive"));
+        assert!(!names.contains(&"unarchive"));
+        assert!(!names.contains(&"archive archived"));
+    }
+
+    #[test]
+    fn unarchive_is_hidden_alias_not_visible_parent_command() {
+        assert!(get_filtered_commands("unarchive").is_empty());
+        assert_eq!(
+            resolve_command_input("unarchive", 0),
+            Some("unarchive".to_string())
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_parent_list_contains_only_parent_commands() {
+        let results = get_filtered_commands("");
+        assert!(
+            results.iter().all(|(name, _)| !name.contains(' ')),
+            "parent command list should not contain subcommands"
+        );
+    }
+
+    #[test]
+    fn get_filtered_commands_keybindings_matches() {
+        let results = get_filtered_commands("keybindings");
+        assert_eq!(results.len(), 1, "keybindings should match exactly one");
+        assert_eq!(results[0].0, "keybindings");
+    }
+
+    #[test]
+    fn ctrl_slash_opens_keybindings() {
+        let mut app = test_app(TodoData::new());
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL));
+        assert!(matches!(
+            action,
+            Some(Action::ExecuteCommand(command)) if command == "keybindings"
+        ));
+    }
+
+    #[test]
+    fn ctrl_underscore_opens_keybindings_for_terminal_ctrl_slash() {
+        let mut app = test_app(TodoData::new());
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL));
+        assert!(matches!(
+            action,
+            Some(Action::ExecuteCommand(command)) if command == "keybindings"
+        ));
     }
 }

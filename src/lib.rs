@@ -43,20 +43,28 @@ pub fn run_cli() -> io::Result<()> {
     let mut stdout = io::stdout();
 
     let cleanup = || -> io::Result<()> {
-        crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::event::PopKeyboardEnhancementFlags,
+            crossterm::terminal::LeaveAlternateScreen
+        )?;
         crossterm::terminal::disable_raw_mode()?;
         Ok(())
     };
 
-    let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
+    let _ = crossterm::execute!(
+        stdout,
+        crossterm::event::PopKeyboardEnhancementFlags,
+        crossterm::terminal::EnterAlternateScreen
+    );
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
     terminal.clear()?;
 
     let result = app::App::run(&mut terminal);
 
-    let _ = cleanup();
     terminal.show_cursor()?;
+    let _ = cleanup();
 
     result
 }

@@ -98,6 +98,11 @@ pub fn render_item(
 
     // Line 1: bullet, priority, pin, due date
     let mut line1 = vec![Span::raw(" ")];
+    line1.push(Span::styled(
+        if multi_selected { "x" } else { " " },
+        Style::default().fg(theme.accent),
+    ));
+    line1.push(Span::raw(" "));
     if item.done {
         line1.push(Span::styled("\u{2713}", Style::default().fg(theme.success)));
     } else {
@@ -108,7 +113,6 @@ pub fn render_item(
         };
         line1.push(Span::styled("-", Style::default().fg(marker_color)));
     }
-    line1.push(Span::raw(" "));
     line1.push(Span::styled(diamond, Style::default().fg(diamond_color)));
     if item.pinned {
         line1.push(Span::raw(" \u{1F4CC}"));
@@ -123,7 +127,7 @@ pub fn render_item(
 
     // Line 2+: text at char 4
     for (i, seg) in wrapped.iter().enumerate() {
-        let mut spans = vec![Span::raw("   ")];
+        let mut spans = vec![Span::raw("     ")];
         if i == 0 {
             spans.extend(highlight_matches(seg, filter, title_style, match_style));
             if let Some(ref cat) = item.category {
