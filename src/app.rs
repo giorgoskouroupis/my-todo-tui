@@ -156,6 +156,7 @@ pub enum Action {
     CancelThemePicker,
     ConfirmDeleteYes,
     ConfirmDeleteNo,
+    ConfirmDeleteArchive,
     PrioritySelect(usize),
     CancelPriorityPicker,
     Copy,
@@ -1840,6 +1841,24 @@ impl App {
             Action::ConfirmDeleteNo => {
                 self.mode = Mode::Normal;
             }
+            Action::ConfirmDeleteArchive => {
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                if let Mode::ConfirmDelete {
+                    ids,
+                    category_names,
+                    ..
+                } = mode
+                {
+                    for id in ids {
+                        self.data.set_archived(id, true);
+                    }
+                    for name in category_names {
+                        self.data.set_category_archived(&name, true);
+                    }
+                    self.mark_dirty();
+                }
+                self.clamp_selection();
+            }
             Action::PrioritySelect(idx) => {
                 const PRIORITIES: [Option<Priority>; 5] = [
                     None,
@@ -2712,6 +2731,86 @@ mod tests {
 
         assert!(app.data.items().is_empty());
         assert!(app.data.categories().contains(&"Work/work1".to_string()));
+    }
+
+    #[test]
+    fn confirm_delete_ignores_unmapped_keys() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        let mut app = test_app(data);
+        app.mode = Mode::ConfirmDelete {
+            ids: vec![id],
+            texts: vec!["ship".to_string()],
+            category_names: Vec::new(),
+        };
+
+        let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert!(action.is_none());
+        assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+        assert!(app.data.get(id).is_some());
+    }
+
+    #[test]
+    fn confirm_delete_n_cancels() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        let mut app = test_app(data);
+        app.mode = Mode::ConfirmDelete {
+            ids: vec![id],
+            texts: vec!["ship".to_string()],
+            category_names: Vec::new(),
+        };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.data.get(id).is_some());
+    }
+
+    #[test]
+    fn confirm_delete_esc_cancels() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        let mut app = test_app(data);
+        app.mode = Mode::ConfirmDelete {
+            ids: vec![id],
+            texts: vec!["ship".to_string()],
+            category_names: Vec::new(),
+        };
+
+        if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)) {
+            app.handle_action(action);
+        }
+
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.data.get(id).is_some());
+    }
+
+    #[test]
+    fn confirm_delete_a_archives_instead_of_deleting() {
+        let mut data = TodoData::new();
+        let id = data.add("ship");
+        let mut app = test_app(data);
+        app.mode = Mode::ConfirmDelete {
+            ids: vec![id],
+            texts: vec!["ship".to_string()],
+            category_names: Vec::new(),
+        };
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        let item = app.data.get(id).unwrap();
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(item.archived);
     }
 
     #[test]

@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "todo-tui"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "arboard",
  "crossterm",

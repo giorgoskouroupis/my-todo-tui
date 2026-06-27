@@ -166,6 +166,73 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     }
 }
 
+fn render_prompt_input_line<'a>(
+    label: &str,
+    text: &str,
+    cursor: usize,
+    width: usize,
+    theme: &Theme,
+) -> Line<'a> {
+    let label_width = label.chars().count();
+    let visible_width = width.saturating_sub(label_width).max(1);
+    let cursor = cursor.min(text.len());
+    let cursor_char = text[..cursor].chars().count();
+    let text_chars: Vec<char> = text.chars().collect();
+    let total_chars = text_chars.len();
+
+    let mut content_width = visible_width.saturating_sub(1).max(1);
+    let mut start = 0usize;
+    let mut end = total_chars.min(content_width);
+
+    for _ in 0..4 {
+        start = if cursor_char >= content_width {
+            cursor_char + 1 - content_width
+        } else {
+            0
+        };
+        end = (start + content_width).min(total_chars);
+        let clipped_left = start > 0;
+        let clipped_right = end < total_chars;
+        let marker_width = usize::from(clipped_left) * 3 + usize::from(clipped_right) * 3;
+        let adjusted_content_width = visible_width.saturating_sub(1 + marker_width).max(1);
+        if adjusted_content_width == content_width {
+            break;
+        }
+        content_width = adjusted_content_width;
+    }
+
+    let clipped_left = start > 0;
+    let clipped_right = end < total_chars;
+    let before_cursor: String = text_chars[start..cursor_char.min(end)].iter().collect();
+    let after_cursor: String = if cursor_char < end {
+        text_chars[cursor_char..end].iter().collect()
+    } else {
+        String::new()
+    };
+
+    let mut spans = vec![Span::styled(
+        label.to_string(),
+        Style::default().fg(theme.accent),
+    )];
+    if clipped_left {
+        spans.push(Span::styled("...", Style::default().fg(theme.text_muted)));
+    }
+    spans.push(Span::styled(
+        before_cursor,
+        Style::default().fg(theme.text_primary),
+    ));
+    spans.push(Span::styled("\u{2588}", Style::default().fg(theme.accent)));
+    spans.push(Span::styled(
+        after_cursor,
+        Style::default().fg(theme.text_primary),
+    ));
+    if clipped_right {
+        spans.push(Span::styled("...", Style::default().fg(theme.text_muted)));
+    }
+
+    Line::from(spans)
+}
+
 fn dimmed_theme(theme: &Theme) -> Theme {
     let mut dimmed = theme.clone();
     dimmed.accent = theme.text_muted;
@@ -518,13 +585,7 @@ fn render_cmd_completions(
     } else {
         None
     };
-    let hint = if parent_command.is_some() {
-        "Up/Down choose, type to filter, Tab autocomplete, Enter run, Left/Backspace back"
-    } else {
-        "Up/Down choose, type to filter, Tab autocomplete/options, Enter open/run"
-    };
-    let hint_height = 3;
-    let max_rows = area.height.saturating_sub(3 + hint_height).max(1) as usize;
+    let max_rows = area.height.saturating_sub(3).max(1) as usize;
     let visible_rows = matches.len().min(max_rows);
     let height = visible_rows as u16 + 2;
     let display_labels: Vec<String> = matches
@@ -538,13 +599,12 @@ fn render_cmd_completions(
         .unwrap_or(18)
         .max(14);
     let width = ((cmd_width + 48) as u16).min(area.width.saturating_sub(2));
-    let total_height = height + hint_height;
-    let popup_y = area.bottom().saturating_sub(total_height + 1);
+    let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
     let popup_area = Rect::new(
         popup_x,
-        popup_y.min(area.bottom().saturating_sub(total_height)),
+        popup_y.min(area.bottom().saturating_sub(height)),
         width,
         height,
     );
@@ -606,20 +666,6 @@ fn render_cmd_completions(
 
     frame.render_widget(Clear, popup_area);
     frame.render_widget(paragraph, popup_area);
-
-    let hint_area = Rect::new(popup_area.x, popup_area.bottom(), popup_area.width, 3);
-    let hint_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_default))
-        .style(Style::default().bg(theme.bg_primary));
-    let hint_paragraph = Paragraph::new(Line::from(vec![Span::styled(
-        hint,
-        Style::default().fg(theme.warning),
-    )]))
-    .block(hint_block)
-    .style(Style::default().bg(theme.bg_primary));
-    frame.render_widget(Clear, hint_area);
-    frame.render_widget(hint_paragraph, hint_area);
 }
 
 fn command_popup_title(parent_command: Option<&str>) -> String {
@@ -1627,7 +1673,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Popups", "", true),
         (
             "Delete confirm",
-            "Y/y/Enter confirms, any other key cancels",
+            "Y/Enter delete, N/Esc cancel, A archive",
             false,
         ),
         ("Help/keybindings", "q or Esc closes", false),
@@ -1756,23 +1802,6 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
             .style(Style::default().bg(theme.bg_secondary)),
         );
     }
-    // blank line
-    lines.push(Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)));
-    // Y/n prompt
-    lines.push(
-        Line::from(vec![
-            Span::styled("[", Style::default().fg(theme.text_muted)),
-            Span::styled(
-                "Y",
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("/n]", Style::default().fg(theme.text_muted)),
-        ])
-        .style(Style::default().bg(theme.bg_secondary)),
-    );
-
     let content_width = lines_text
         .iter()
         .map(|l| l.len() as u16)
@@ -2039,31 +2068,24 @@ fn render_input(
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.border_default));
+    let input_width = area.width.saturating_sub(4) as usize;
 
     let (display_text, cursor_pos) = match mode {
         Mode::Searching => {
-            let line = Line::from(vec![
-                Span::styled("  Search: ", Style::default().fg(theme.accent)),
-                Span::styled(filter, Style::default().fg(theme.text_primary)),
-                Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-            ]);
+            let line =
+                render_prompt_input_line("  Search: ", filter, filter.len(), input_width, theme);
             (line, None::<u16>)
         }
         Mode::Command { .. } => {
-            let mut spans = vec![Span::styled("  /", Style::default().fg(theme.accent))];
-
-            let text = input.text();
-            if text.is_empty() {
-                spans.push(Span::styled("\u{2588}", Style::default().fg(theme.accent)));
+            let line = if input.is_empty() {
+                Line::from(vec![Span::styled(
+                    "  Type to filter, Up/Down choose, Tab complete/options, Enter open/run",
+                    Style::default().fg(theme.warning),
+                )])
             } else {
-                spans.push(Span::styled(
-                    text.to_string(),
-                    Style::default().fg(theme.text_primary),
-                ));
-                spans.push(Span::styled("\u{2588}", Style::default().fg(theme.accent)));
-            }
-
-            (Line::from(spans), None)
+                render_prompt_input_line("  /", input.text(), input.cursor(), input_width, theme)
+            };
+            (line, None)
         }
         Mode::MultiSelect {
             cmd,
@@ -2114,7 +2136,7 @@ fn render_input(
         }
         Mode::ConfirmDelete { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  Y/Enter to confirm, any other key to cancel",
+                "  Y/Enter delete, N/Esc cancel, A archive",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
@@ -2162,37 +2184,22 @@ fn render_input(
             (line, None)
         }
         Mode::CategoryAdd { parent } => {
-            let text = input.text();
             let label = match parent {
                 Some(parent) => format!("  New subcategory under {parent}: "),
                 None => "  New category: ".to_string(),
             };
-            let line = Line::from(vec![
-                Span::styled(label, Style::default().fg(theme.accent)),
-                Span::styled(
-                    if text.is_empty() { "\u{2588}" } else { text },
-                    Style::default().fg(theme.text_primary),
-                ),
-                Span::styled(
-                    if text.is_empty() { "" } else { "\u{2588}" },
-                    Style::default().fg(theme.accent),
-                ),
-            ]);
+            let line =
+                render_prompt_input_line(&label, input.text(), input.cursor(), input_width, theme);
             (line, None)
         }
         Mode::CategoryPicker { .. } => {
-            let text = input.text();
-            let line = Line::from(vec![
-                Span::styled("  Assign category: ", Style::default().fg(theme.accent)),
-                Span::styled(
-                    if text.is_empty() { "\u{2588}" } else { text },
-                    Style::default().fg(theme.text_primary),
-                ),
-                Span::styled(
-                    if text.is_empty() { "" } else { "\u{2588}" },
-                    Style::default().fg(theme.accent),
-                ),
-            ]);
+            let line = render_prompt_input_line(
+                "  Assign category: ",
+                input.text(),
+                input.cursor(),
+                input_width,
+                theme,
+            );
             (line, None)
         }
         Mode::CategoryFilterPicker { .. } => {
@@ -2248,48 +2255,19 @@ fn render_input(
             (line.style(Style::default().bg(theme.bg_primary)), None)
         }
         Mode::RenameInput { .. } => {
-            let text = input.text();
-            let cursor = input.cursor();
-            let spans = if cursor == 0 {
-                vec![
-                    Span::raw("  "),
-                    Span::styled("Rename to: ", Style::default().fg(theme.accent)),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(text, Style::default().fg(theme.text_primary)),
-                ]
-            } else {
-                let before = &text[..cursor];
-                let after = &text[cursor..];
-                vec![
-                    Span::raw("  "),
-                    Span::styled("Rename to: ", Style::default().fg(theme.accent)),
-                    Span::styled(before, Style::default().fg(theme.text_primary)),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(after, Style::default().fg(theme.text_primary)),
-                ]
-            };
-            (Line::from(spans), None)
+            let line = render_prompt_input_line(
+                "  Rename to: ",
+                input.text(),
+                input.cursor(),
+                input_width,
+                theme,
+            );
+            (line, None)
         }
         Mode::Editing { .. } => {
-            let text = input.text();
-            let cursor = input.cursor();
-            let spans = if cursor == 0 {
-                vec![
-                    Span::raw("  "),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(text, Style::default().fg(theme.text_primary)),
-                ]
-            } else {
-                let before = &text[..cursor];
-                let after = &text[cursor..];
-                vec![
-                    Span::raw("  "),
-                    Span::styled(before, Style::default().fg(theme.text_primary)),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(after, Style::default().fg(theme.text_primary)),
-                ]
-            };
-            (Line::from(spans), None)
+            let line =
+                render_prompt_input_line("  ", input.text(), input.cursor(), input_width, theme);
+            (line, None)
         }
         _ if input.is_empty() && matches!(mode, Mode::Normal) => {
             let placeholder = Line::from(vec![Span::styled(
@@ -2299,27 +2277,9 @@ fn render_input(
             (placeholder, None)
         }
         _ => {
-            let text = input.text();
-            let cursor = input.cursor();
-
-            if cursor == 0 {
-                let line = Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(text, Style::default().fg(theme.text_primary)),
-                ]);
-                (line, None)
-            } else {
-                let before = &text[..cursor];
-                let after = &text[cursor..];
-                let line = Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(before, Style::default().fg(theme.text_primary)),
-                    Span::styled("\u{2588}", Style::default().fg(theme.accent)),
-                    Span::styled(after, Style::default().fg(theme.text_primary)),
-                ]);
-                (line, None)
-            }
+            let line =
+                render_prompt_input_line("  ", input.text(), input.cursor(), input_width, theme);
+            (line, None)
         }
     };
 
