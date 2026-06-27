@@ -74,7 +74,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     let popup_area = mid;
     if let Mode::Command { selected } = state.mode {
         render_cmd_completions(frame, popup_area, state.input, *selected, state.theme);
-    } else if let Mode::ThemePicker { selected } = state.mode {
+    } else if let Mode::ThemePicker { selected, .. } = state.mode {
         render_theme_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::PriorityPicker { selected } = state.mode {
         render_priority_picker(frame, popup_area, *selected, state.theme);
@@ -124,7 +124,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
             state.categories,
             state.theme,
         );
-    } else if let Mode::SortPicker { selected } = state.mode {
+    } else if let Mode::SortPicker { selected, .. } = state.mode {
         render_sort_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::Help = state.mode {
         render_help_popup(frame, popup_area, state.theme);
@@ -390,13 +390,13 @@ fn render_sidebar(
             Style::default().fg(theme.accent),
         );
 
-        let prefix = if cat.depth == 0 { "" } else { "  " };
+        let prefix = if cat.depth == 0 { "" } else { " - " };
         let label_style = if cat.is_all {
             style.fg(theme.text_muted)
         } else {
             style
         };
-        let wrapped = wrap_text(&cat.label, name_width.saturating_sub(cat.depth * 2));
+        let wrapped = wrap_text(&cat.label, name_width.saturating_sub(prefix.len()));
         for (j, seg) in wrapped.iter().enumerate() {
             let mut spans = vec![Span::raw(" ")];
             if j == 0 {
@@ -404,7 +404,7 @@ fn render_sidebar(
                 spans.push(Span::raw(prefix));
                 spans.push(Span::styled(seg.clone(), label_style));
             } else {
-                spans.push(Span::raw(if cat.depth == 0 { "   " } else { "     " }));
+                spans.push(Span::raw(if cat.depth == 0 { "   " } else { "      " }));
                 spans.push(Span::styled(seg.clone(), label_style));
             }
             lines.push(Line::from(spans).style(Style::default().bg(bg)));
@@ -512,26 +512,53 @@ fn render_cmd_completions(
         return;
     }
 
-    let max_rows = area.height.saturating_sub(3).max(1) as usize;
+    let safe_selected = selected.min(matches.len().saturating_sub(1));
+    let parent_command = if prefix.contains(char::is_whitespace) {
+        prefix.split_whitespace().next().map(str::to_string)
+    } else {
+        None
+    };
+    let hint = if parent_command.is_some() {
+        "Up/Down choose, type to filter, Tab autocomplete, Enter run, Left/Backspace back"
+    } else {
+        "Up/Down choose, type to filter, Tab autocomplete/options, Enter open/run"
+    };
+    let hint_height = 3;
+    let max_rows = area.height.saturating_sub(3 + hint_height).max(1) as usize;
     let visible_rows = matches.len().min(max_rows);
     let height = visible_rows as u16 + 2;
-    let cmd_width = 18usize;
+    let display_labels: Vec<String> = matches
+        .iter()
+        .map(|(cmd, _)| command_display_label(cmd, parent_command.as_deref()))
+        .collect();
+    let cmd_width = display_labels
+        .iter()
+        .map(String::len)
+        .max()
+        .unwrap_or(18)
+        .max(14);
     let width = ((cmd_width + 48) as u16).min(area.width.saturating_sub(2));
-    let popup_y = area.bottom().saturating_sub(height + 1);
+    let total_height = height + hint_height;
+    let popup_y = area.bottom().saturating_sub(total_height + 1);
     let popup_x = area.x + 2;
 
     let popup_area = Rect::new(
         popup_x,
-        popup_y.min(area.bottom().saturating_sub(height)),
+        popup_y.min(area.bottom().saturating_sub(total_height)),
         width,
         height,
     );
 
-    let safe_selected = selected.min(matches.len().saturating_sub(1));
     let start = safe_selected.saturating_sub(visible_rows.saturating_sub(1));
     let end = (start + visible_rows).min(matches.len());
     let mut lines = Vec::new();
-    for (i, (cmd, desc)) in matches.iter().enumerate().take(end).skip(start) {
+    for (i, ((cmd, desc), display_label)) in matches
+        .iter()
+        .zip(display_labels.iter())
+        .enumerate()
+        .take(end)
+        .skip(start)
+    {
         let highlighted = i == safe_selected;
         let bg = if highlighted {
             theme.bg_tertiary
@@ -542,7 +569,12 @@ fn render_cmd_completions(
         lines.push(
             Line::from(vec![
                 Span::styled(
-                    format!("  /{:<1$}", cmd, cmd_width),
+                    format!(
+                        "  {}{:<2$}",
+                        command_display_prefix(*cmd, parent_command.as_deref()),
+                        display_label,
+                        cmd_width
+                    ),
                     Style::default()
                         .fg(theme.accent)
                         .add_modifier(if highlighted {
@@ -560,7 +592,7 @@ fn render_cmd_completions(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
-        .title(" Commands ")
+        .title(command_popup_title(parent_command.as_deref()))
         .title_style(
             Style::default()
                 .fg(theme.accent)
@@ -574,6 +606,44 @@ fn render_cmd_completions(
 
     frame.render_widget(Clear, popup_area);
     frame.render_widget(paragraph, popup_area);
+
+    let hint_area = Rect::new(popup_area.x, popup_area.bottom(), popup_area.width, 3);
+    let hint_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_default))
+        .style(Style::default().bg(theme.bg_primary));
+    let hint_paragraph = Paragraph::new(Line::from(vec![Span::styled(
+        hint,
+        Style::default().fg(theme.warning),
+    )]))
+    .block(hint_block)
+    .style(Style::default().bg(theme.bg_primary));
+    frame.render_widget(Clear, hint_area);
+    frame.render_widget(hint_paragraph, hint_area);
+}
+
+fn command_popup_title(parent_command: Option<&str>) -> String {
+    match parent_command {
+        Some(parent) => format!(" /{parent} "),
+        None => " Commands ".to_string(),
+    }
+}
+
+fn command_display_label(command: &str, parent_command: Option<&str>) -> String {
+    if let Some(parent) = parent_command {
+        if let Some(rest) = command.strip_prefix(&format!("{parent} ")) {
+            return rest.to_string();
+        }
+    }
+    command.to_string()
+}
+
+fn command_display_prefix(command: &str, parent_command: Option<&str>) -> &'static str {
+    if parent_command.is_some_and(|parent| command.starts_with(&format!("{parent} "))) {
+        " "
+    } else {
+        "/"
+    }
 }
 
 fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
@@ -2134,7 +2204,7 @@ fn render_input(
         }
         Mode::SortPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [p: priority, d: due date, n: none, Enter: select, Esc: cancel]",
+                "  [up/down: navigate, Enter: select, Esc: cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)

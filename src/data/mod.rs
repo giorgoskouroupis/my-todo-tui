@@ -232,12 +232,6 @@ impl TodoData {
                 depth: 0,
                 is_all: false,
             });
-            entries.push(CategoryEntry {
-                path: parent.clone(),
-                label: "all".to_string(),
-                depth: 1,
-                is_all: true,
-            });
 
             while i < categories.len() {
                 let current = &categories[i];
@@ -476,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn category_entries_include_parent_all_and_children() {
+    fn category_entries_include_parent_and_children() {
         let mut data = TodoData::new();
         data.add_category("Work/work1");
         data.add_category("Work/work2");
@@ -498,7 +492,6 @@ mod tests {
             rows,
             vec![
                 ("Work", "Work", 0, false),
-                ("Work", "all", 1, true),
                 ("Work/work1", "work1", 1, false),
                 ("Work/work2", "work2", 1, false),
             ]

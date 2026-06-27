@@ -96,23 +96,25 @@ pub fn render_item(
     let wrapped = super::wrap_text(&item.text, text_width.max(10));
     let mut lines = Vec::new();
 
-    // Line 1: bullet, priority, pin, due date
-    let mut line1 = vec![Span::raw(" ")];
+    // Line 1: status marker, priority, pin, due date
+    let mut line1 = Vec::new();
     line1.push(Span::styled(
         if multi_selected { "x" } else { " " },
         Style::default().fg(theme.accent),
     ));
-    line1.push(Span::raw(" "));
     if item.done {
         line1.push(Span::styled("\u{2713}", Style::default().fg(theme.success)));
+    } else if item.doing {
+        line1.push(Span::styled(
+            "\u{25e6}",
+            Style::default()
+                .fg(theme.text_primary)
+                .add_modifier(Modifier::BOLD),
+        ));
     } else {
-        let marker_color = if item.doing {
-            theme.accent
-        } else {
-            theme.text_primary
-        };
-        line1.push(Span::styled("-", Style::default().fg(marker_color)));
+        line1.push(Span::styled("-", Style::default().fg(theme.text_primary)));
     }
+    line1.push(Span::raw(" "));
     line1.push(Span::styled(diamond, Style::default().fg(diamond_color)));
     if item.pinned {
         line1.push(Span::raw(" \u{1F4CC}"));

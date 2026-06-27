@@ -60,6 +60,7 @@ pub enum Mode {
     },
     ThemePicker {
         selected: usize,
+        original_theme: Theme,
     },
     PriorityPicker {
         selected: usize,
@@ -92,6 +93,7 @@ pub enum Mode {
     },
     SortPicker {
         selected: usize,
+        original_sort: SortMode,
     },
     ArchivePicker {
         selected: usize,
@@ -754,6 +756,14 @@ impl App {
                     keys::handle_normal(key, &items, self.selected_index)
                 }
             }
+            Mode::Editing { edit_id: None } => {
+                let action = keys::handle_editing(key, &mut self.input);
+                if action.is_none() && self.input.is_empty() {
+                    Some(Action::CancelEdit)
+                } else {
+                    action
+                }
+            }
             Mode::Editing { .. } => keys::handle_editing(key, &mut self.input),
             Mode::RenameInput { .. } => {
                 if let KeyCode::Enter = key.code {
@@ -801,7 +811,7 @@ impl App {
                     keys::handle_multiselect(key, &items, self.selected_index)
                 }
             }
-            Mode::ThemePicker { selected } => {
+            Mode::ThemePicker { selected, .. } => {
                 let action = keys::handle_theme_picker(key);
                 if action.is_none() && key.code == KeyCode::Enter {
                     return Some(Action::ThemeSelect(*selected));
@@ -861,8 +871,15 @@ impl App {
             }
             Mode::CategoryCreateChoice { .. } => keys::handle_category_create_choice(key),
             Mode::CategoryParentPicker { .. } => keys::handle_category_parent_picker(key),
-            Mode::CategoryAdd { .. } => keys::handle_category_add(key, &mut self.input),
-            Mode::SortPicker { selected } => {
+            Mode::CategoryAdd { .. } => {
+                let action = keys::handle_category_add(key, &mut self.input);
+                if action.is_none() && self.input.is_empty() {
+                    Some(Action::CancelCategoryAdd)
+                } else {
+                    action
+                }
+            }
+            Mode::SortPicker { selected, .. } => {
                 let action = keys::handle_sort_picker(key);
                 if action.is_none() && key.code == KeyCode::Enter {
                     return Some(Action::SortSelect(*selected));
@@ -906,7 +923,7 @@ impl App {
             Mode::Command { selected } => {
                 resolve_command_input(self.input.text(), *selected).map(Action::ExecuteCommand)
             }
-            Mode::ThemePicker { selected } => Some(Action::ThemeSelect(*selected)),
+            Mode::ThemePicker { selected, .. } => Some(Action::ThemeSelect(*selected)),
             Mode::PriorityPicker { selected } => Some(Action::PrioritySelect(*selected)),
             Mode::CategoryPicker { selected, target } => {
                 if self.input.is_empty() || matches!(target, CategoryPickerTarget::MoveCategory(_))
@@ -923,7 +940,7 @@ impl App {
             }
             Mode::CategoryCreateChoice { .. } => Some(Action::AddCategoryChoice(usize::MAX)),
             Mode::CategoryParentPicker { .. } => Some(Action::SelectCategoryParent(usize::MAX)),
-            Mode::SortPicker { selected } => Some(Action::SortSelect(*selected)),
+            Mode::SortPicker { selected, .. } => Some(Action::SortSelect(*selected)),
             Mode::ArchivePicker { selected } => Some(Action::ArchiveSelect(*selected)),
             Mode::FilterPicker { selected } => Some(Action::FilterSelect(*selected)),
             Mode::DueDateFilterPicker { selected } => Some(Action::DueDateFilterSelect(*selected)),
@@ -938,17 +955,29 @@ impl App {
                     if *selected > 0 {
                         *selected -= 1;
                     }
-                } else if let Mode::ThemePicker { ref mut selected } = &mut self.mode {
+                } else if let Mode::ThemePicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
                     if *selected > 0 {
                         *selected -= 1;
+                        if let Some(theme) = theme_by_index(*selected) {
+                            self.theme = theme;
+                        }
                     }
                 } else if let Mode::PriorityPicker { ref mut selected } = &mut self.mode {
                     if *selected > 0 {
                         *selected -= 1;
                     }
-                } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
+                } else if let Mode::SortPicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
                     if *selected > 0 {
                         *selected -= 1;
+                        if let Some(mode) = sort_by_index(*selected) {
+                            self.sort_mode = mode;
+                        }
                     }
                 } else if let Mode::ArchivePicker { ref mut selected } = &mut self.mode {
                     if *selected > 0 {
@@ -1013,20 +1042,32 @@ impl App {
                     if *selected < max {
                         *selected += 1;
                     }
-                } else if let Mode::ThemePicker { ref mut selected } = &mut self.mode {
+                } else if let Mode::ThemePicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
                     let max = Theme::theme_names().len().saturating_sub(1);
                     if *selected < max {
                         *selected += 1;
+                        if let Some(theme) = theme_by_index(*selected) {
+                            self.theme = theme;
+                        }
                     }
                 } else if let Mode::PriorityPicker { ref mut selected } = &mut self.mode {
                     let max = 4usize;
                     if *selected < max {
                         *selected += 1;
                     }
-                } else if let Mode::SortPicker { ref mut selected } = &mut self.mode {
+                } else if let Mode::SortPicker {
+                    ref mut selected, ..
+                } = &mut self.mode
+                {
                     let max = 2usize;
                     if *selected < max {
                         *selected += 1;
+                        if let Some(mode) = sort_by_index(*selected) {
+                            self.sort_mode = mode;
+                        }
                     }
                 } else if let Mode::ArchivePicker { ref mut selected } = &mut self.mode {
                     let max = 7usize;
@@ -1292,6 +1333,14 @@ impl App {
                 let cmd = parts[0].to_lowercase();
                 let arg = parts.get(1).map(|s| s.to_string());
 
+                if arg.is_none() && has_visible_subcommands(&cmd) {
+                    self.input.set_text(&format!("{cmd} "));
+                    self.mode = Mode::Command { selected: 0 };
+                    self.completions.clear();
+                    self.completion_index = 0;
+                    return false;
+                }
+
                 match cmd.as_str() {
                     "search" | "s" => {
                         if let Some(query) = arg {
@@ -1499,6 +1548,7 @@ impl App {
                             self.clamp_selection();
                         }
                         Some("clear") => {
+                            self.filter.clear();
                             self.due_filter = None;
                             self.priority_filter = None;
                             self.category_filter = None;
@@ -1512,6 +1562,17 @@ impl App {
                             self.mode = Mode::FilterPicker { selected: 0 };
                         }
                     },
+                    "reset" => {
+                        self.filter.clear();
+                        self.due_filter = None;
+                        self.priority_filter = None;
+                        self.category_filter = None;
+                        self.category_index = 0;
+                        self.show_archived = false;
+                        self.sort_mode = SortMode::Default;
+                        self.mode = Mode::Normal;
+                        self.clamp_selection();
+                    }
                     "move" | "m" => {
                         if self.pane == Pane::Categories {
                             if let Some(category) = self.selected_category_path() {
@@ -1531,7 +1592,10 @@ impl App {
                         }
                     }
                     "themes" => {
-                        self.mode = Mode::ThemePicker { selected: 0 };
+                        self.mode = Mode::ThemePicker {
+                            selected: theme_index_by_name(self.theme.name),
+                            original_theme: self.theme.clone(),
+                        };
                     }
                     "priorities" | "p" => {
                         self.mode = Mode::PriorityPicker { selected: 0 };
@@ -1559,7 +1623,10 @@ impl App {
                             self.mode = Mode::Normal;
                         }
                         _ => {
-                            self.mode = Mode::SortPicker { selected: 0 };
+                            self.mode = Mode::SortPicker {
+                                selected: sort_index(self.sort_mode),
+                                original_sort: self.sort_mode,
+                            };
                         }
                     },
                     _ => {
@@ -1734,6 +1801,9 @@ impl App {
                 self.mode = Mode::Normal;
             }
             Action::CancelThemePicker => {
+                if let Mode::ThemePicker { original_theme, .. } = &self.mode {
+                    self.theme = original_theme.clone();
+                }
                 self.mode = Mode::Normal;
             }
             Action::ConfirmDeleteYes => {
@@ -1802,6 +1872,7 @@ impl App {
                         self.mode = Mode::PriorityPicker { selected: 0 };
                     }
                     4 => {
+                        self.filter.clear();
                         self.due_filter = None;
                         self.priority_filter = None;
                         self.category_filter = None;
@@ -1927,9 +1998,22 @@ impl App {
                         parent: None,
                         name,
                     },
-                    Mode::ThemePicker { .. }
-                    | Mode::CategoryPicker { .. }
-                    | Mode::SortPicker { .. }
+                    Mode::ThemePicker { original_theme, .. } => {
+                        self.theme = original_theme;
+                        self.input.clear();
+                        self.completions.clear();
+                        self.completion_index = 0;
+                        Mode::Command { selected: 0 }
+                    }
+                    Mode::SortPicker { original_sort, .. } => {
+                        self.sort_mode = original_sort;
+                        self.clamp_selection();
+                        self.input.clear();
+                        self.completions.clear();
+                        self.completion_index = 0;
+                        Mode::Command { selected: 0 }
+                    }
+                    Mode::CategoryPicker { .. }
                     | Mode::ArchivePicker { .. }
                     | Mode::FilterPicker { .. } => {
                         self.input.clear();
@@ -2294,17 +2378,23 @@ impl App {
                 self.mode = Mode::Normal;
             }
             Action::StartSortPicker => {
-                self.mode = Mode::SortPicker { selected: 0 };
+                self.mode = Mode::SortPicker {
+                    selected: sort_index(self.sort_mode),
+                    original_sort: self.sort_mode,
+                };
             }
             Action::SortSelect(idx) => {
-                const SORTS: [SortMode; 3] =
-                    [SortMode::Default, SortMode::DueDate, SortMode::Priority];
-                if let Some(&mode) = SORTS.get(idx) {
+                if let Some(mode) = sort_by_index(idx) {
                     self.sort_mode = mode;
+                    self.clamp_selection();
                 }
                 self.mode = Mode::Normal;
             }
             Action::CancelSortPicker => {
+                if let Mode::SortPicker { original_sort, .. } = &self.mode {
+                    self.sort_mode = *original_sort;
+                    self.clamp_selection();
+                }
                 self.mode = Mode::Normal;
             }
             Action::StartCategoryAddWithChar(c) => {
@@ -2343,6 +2433,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("priorities", "Filter by priority"),
     ("p", "Alias for priorities"),
     ("rename", "Rename category path"),
+    ("reset", "Clear all filters and restore default view"),
     ("search", "Filter items by text"),
     ("s", "Alias for search"),
     ("sort", "Sort items (priority/due/default)"),
@@ -2380,6 +2471,7 @@ const VISIBLE_COMMANDS: &[(&str, &str)] = &[
     ("keybindings", "Show keybindings"),
     ("move", "Move selected item/category"),
     ("rename", "Rename category path"),
+    ("reset", "Clear all filters"),
     ("search", "Filter items by text"),
     ("sort", "Sort items"),
     ("sort default", "Restore default sort"),
@@ -2411,7 +2503,13 @@ pub fn get_filtered_commands(prefix: &str) -> Vec<(&'static str, &'static str)> 
 fn get_completions(prefix: &str) -> Vec<String> {
     get_filtered_commands(prefix)
         .into_iter()
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| {
+            if !contains_whitespace(name) && has_visible_subcommands(name) {
+                format!("{name} ")
+            } else {
+                name.to_string()
+            }
+        })
         .collect()
 }
 
@@ -2455,6 +2553,39 @@ fn is_known_command(name: &str) -> bool {
         .any(|(command, _)| command.eq_ignore_ascii_case(name))
 }
 
+fn has_visible_subcommands(command: &str) -> bool {
+    let prefix = format!("{command} ");
+    VISIBLE_COMMANDS
+        .iter()
+        .any(|(name, _)| name.starts_with(&prefix))
+}
+
+fn theme_index_by_name(name: &str) -> usize {
+    Theme::theme_names()
+        .iter()
+        .position(|theme_name| *theme_name == name)
+        .unwrap_or(0)
+}
+
+fn theme_by_index(idx: usize) -> Option<Theme> {
+    Theme::theme_names()
+        .get(idx)
+        .and_then(|name| Theme::by_name(name))
+}
+
+fn sort_by_index(idx: usize) -> Option<SortMode> {
+    const SORTS: [SortMode; 3] = [SortMode::Default, SortMode::DueDate, SortMode::Priority];
+    SORTS.get(idx).copied()
+}
+
+fn sort_index(mode: SortMode) -> usize {
+    match mode {
+        SortMode::Default => 0,
+        SortMode::DueDate => 1,
+        SortMode::Priority => 2,
+    }
+}
+
 fn contains_whitespace(value: &str) -> bool {
     value.chars().any(char::is_whitespace)
 }
@@ -2489,8 +2620,8 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        get_filtered_commands, resolve_command_input, Action, App, CategoryPickerTarget, Mode,
-        MultiSelectCmd, Pane, RenameTarget, SortMode,
+        get_completions, get_filtered_commands, resolve_command_input, theme_index_by_name, Action,
+        App, CategoryPickerTarget, Mode, MultiSelectCmd, Pane, RenameTarget, SortMode,
     };
     use crate::clip::Clipboard;
     use crate::data::TodoData;
@@ -3077,13 +3208,50 @@ mod tests {
     #[test]
     fn right_arrow_in_popup_list_behaves_like_enter() {
         let mut app = test_app(TodoData::new());
-        app.mode = Mode::SortPicker { selected: 1 };
+        app.mode = Mode::SortPicker {
+            selected: 1,
+            original_sort: SortMode::Default,
+        };
 
         if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)) {
             app.handle_action(action);
         }
 
         assert_eq!(app.sort_mode, SortMode::DueDate);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn theme_picker_previews_highlighted_theme_and_cancel_restores_original() {
+        let mut app = test_app(TodoData::new());
+        app.theme = Theme::one_dark();
+        app.mode = Mode::ThemePicker {
+            selected: theme_index_by_name("one-dark"),
+            original_theme: app.theme.clone(),
+        };
+
+        app.handle_action(Action::SelectPrev);
+
+        assert_ne!(app.theme.name, "one-dark");
+        app.handle_action(Action::CancelThemePicker);
+        assert_eq!(app.theme.name, "one-dark");
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn sort_picker_previews_highlighted_sort_and_cancel_restores_original() {
+        let mut app = test_app(TodoData::new());
+        app.sort_mode = SortMode::Default;
+        app.mode = Mode::SortPicker {
+            selected: 0,
+            original_sort: SortMode::Default,
+        };
+
+        app.handle_action(Action::SelectNext);
+
+        assert_eq!(app.sort_mode, SortMode::DueDate);
+        app.handle_action(Action::CancelSortPicker);
+        assert_eq!(app.sort_mode, SortMode::Default);
         assert!(matches!(app.mode, Mode::Normal));
     }
 
@@ -3197,6 +3365,44 @@ mod tests {
     }
 
     #[test]
+    fn empty_new_item_prompt_returns_to_normal_mode() {
+        let mut app = test_app(TodoData::new());
+        app.mode = Mode::Editing { edit_id: None };
+        app.input.insert_str("a");
+
+        if let Some(action) =
+            app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        {
+            app.handle_action(action);
+        }
+
+        assert_eq!(app.input.text(), "");
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn reset_command_clears_all_filters() {
+        let mut app = test_app(TodoData::new());
+        app.filter = "ship".to_string();
+        app.priority_filter = Some(crate::data::Priority::High);
+        app.due_filter = Some(super::DueFilter::Today);
+        app.category_filter = Some("Work".to_string());
+        app.category_index = 1;
+        app.show_archived = true;
+        app.sort_mode = SortMode::Priority;
+
+        app.handle_action(Action::ExecuteCommand("reset".to_string()));
+
+        assert_eq!(app.filter, "");
+        assert_eq!(app.priority_filter, None);
+        assert_eq!(app.due_filter, None);
+        assert_eq!(app.category_filter, None);
+        assert_eq!(app.category_index, 0);
+        assert!(!app.show_archived);
+        assert_eq!(app.sort_mode, SortMode::Default);
+    }
+
+    #[test]
     fn terminal_ctrl_backspace_encoding_deletes_previous_word_in_text_prompt() {
         let mut app = test_app(TodoData::new());
         app.mode = Mode::Editing { edit_id: None };
@@ -3245,6 +3451,38 @@ mod tests {
                 "archive restore all"
             ]
         );
+    }
+
+    #[test]
+    fn tab_completion_enters_subcommand_context_for_parent_commands() {
+        assert_eq!(get_completions("so"), vec!["sort ".to_string()]);
+        assert_eq!(get_completions("filter"), vec!["filter ".to_string()]);
+        assert_eq!(get_completions("archive"), vec!["archive ".to_string()]);
+    }
+
+    #[test]
+    fn subcommand_context_filters_by_typed_suffix() {
+        let sort_results: Vec<&str> = get_filtered_commands("sort du")
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(sort_results, vec!["sort due"]);
+
+        let filter_results: Vec<&str> = get_filtered_commands("filter pr")
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(filter_results, vec!["filter priority"]);
+    }
+
+    #[test]
+    fn parent_command_execution_enters_promptable_subcommand_context() {
+        let mut app = test_app(TodoData::new());
+
+        app.handle_action(Action::ExecuteCommand("sort".to_string()));
+
+        assert_eq!(app.input.text(), "sort ");
+        assert!(matches!(app.mode, Mode::Command { selected: 0 }));
     }
 
     #[test]

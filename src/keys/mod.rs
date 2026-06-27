@@ -396,9 +396,6 @@ pub fn handle_sort_picker(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Up => Some(Action::SelectPrev),
         KeyCode::Down => Some(Action::SelectNext),
-        KeyCode::Char('p') => Some(Action::SortSelect(2)),
-        KeyCode::Char('d') => Some(Action::SortSelect(1)),
-        KeyCode::Char('n') => Some(Action::SortSelect(0)),
         KeyCode::Esc => Some(Action::CancelSortPicker),
         _ => None,
     }
