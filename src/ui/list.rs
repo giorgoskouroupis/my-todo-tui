@@ -69,7 +69,7 @@ pub fn render_item(
     } else if multi_selected {
         theme.accent_selection
     } else {
-        theme.bg_secondary
+        theme.bg_primary
     };
 
     let is_overdue_item = !item.done && item.due_date.as_deref().is_some_and(date::is_overdue);
