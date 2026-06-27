@@ -763,18 +763,30 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
 }
 
 fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let items: [(&str, Option<Priority>); 5] = [
-        ("All priorities", None),
-        ("Urgent", Some(Priority::Urgent)),
-        ("High", Some(Priority::High)),
-        ("Normal", Some(Priority::Normal)),
-        ("Low", Some(Priority::Low)),
-    ];
-    let height = items.len() as u16 + 2;
-    let width = 24;
+    render_menu_popup(
+        frame,
+        area,
+        " Priorities ",
+        &["All priorities", "Urgent", "High", "Normal", "Low"],
+        selected,
+        24,
+        theme,
+    );
+}
+
+fn render_menu_popup(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    items: &[&str],
+    selected: usize,
+    width: u16,
+    theme: &Theme,
+) {
+    let height = (items.len() as u16 + 2).min(area.height.saturating_sub(1));
+    let width = width.min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
-
     let popup_area = Rect::new(
         popup_x,
         popup_y.min(area.bottom().saturating_sub(height)),
@@ -782,20 +794,25 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
         height,
     );
 
-    let mut lines = Vec::new();
-    for (i, (label, _)) in items.iter().enumerate() {
-        let is_highlighted = i == selected;
-        let bg = if is_highlighted {
-            theme.bg_tertiary
-        } else {
-            theme.bg_primary
-        };
-
-        lines.push(
+    let visible_rows = height.saturating_sub(2) as usize;
+    let safe_selected = selected.min(items.len().saturating_sub(1));
+    let start = safe_selected.saturating_sub(visible_rows.saturating_sub(1));
+    let lines: Vec<_> = items
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible_rows)
+        .map(|(i, label)| {
+            let is_highlighted = i == safe_selected;
+            let bg = if is_highlighted {
+                theme.bg_tertiary
+            } else {
+                theme.bg_primary
+            };
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    label.to_string(),
+                    (*label).to_string(),
                     Style::default()
                         .fg(theme.text_primary)
                         .add_modifier(if is_highlighted {
@@ -806,21 +823,20 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
                 ),
                 Span::raw("  "),
             ])
-            .style(Style::default().bg(bg)),
-        );
-    }
+            .style(Style::default().bg(bg))
+        })
+        .collect();
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
-        .title(" Priorities ")
+        .title(title)
         .title_style(
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )
         .style(Style::default().bg(theme.bg_primary));
-
     let paragraph = Paragraph::new(lines)
         .block(block)
         .style(Style::default().bg(theme.bg_primary));
@@ -830,195 +846,48 @@ fn render_priority_picker(frame: &mut Frame, area: Rect, selected: usize, theme:
 }
 
 fn render_archive_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let items = [
-        "Archive bulk",
-        "Archive done",
-        "Archive one",
-        "Archive all",
-        "Archived view",
-        "Restore bulk",
-        "Restore one",
-        "Restore all",
-    ];
-    let height = (items.len() as u16 + 2).min(area.height.saturating_sub(1));
-    let width = 24u16.min(area.width.saturating_sub(2));
-    let popup_y = area.bottom().saturating_sub(height + 1);
-    let popup_x = area.x + 2;
-
-    let popup_area = Rect::new(
-        popup_x,
-        popup_y.min(area.bottom().saturating_sub(height)),
-        width,
-        height,
+    render_menu_popup(
+        frame,
+        area,
+        " Archive ",
+        &[
+            "Archive bulk",
+            "Archive done",
+            "Archive one",
+            "Archive all",
+            "Archived view",
+            "Restore bulk",
+            "Restore one",
+            "Restore all",
+        ],
+        selected,
+        24,
+        theme,
     );
-
-    let mut lines = Vec::new();
-    for (i, label) in items.iter().enumerate() {
-        let is_highlighted = i == selected;
-        let bg = if is_highlighted {
-            theme.bg_tertiary
-        } else {
-            theme.bg_primary
-        };
-
-        lines.push(
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw("  "),
-            ])
-            .style(Style::default().bg(bg)),
-        );
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_default))
-        .title(" Archive ")
-        .title_style(
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(theme.bg_primary));
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .style(Style::default().bg(theme.bg_primary));
-
-    frame.render_widget(Clear, popup_area);
-    frame.render_widget(paragraph, popup_area);
 }
 
 fn render_filter_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let items = ["Archived", "Category", "Due date", "Priority", "Clear all"];
-    let height = (items.len() as u16 + 2).min(area.height.saturating_sub(1));
-    let width = 24u16.min(area.width.saturating_sub(2));
-    let popup_y = area.bottom().saturating_sub(height + 1);
-    let popup_x = area.x + 2;
-
-    let popup_area = Rect::new(
-        popup_x,
-        popup_y.min(area.bottom().saturating_sub(height)),
-        width,
-        height,
+    render_menu_popup(
+        frame,
+        area,
+        " Filter ",
+        &["Archived", "Category", "Due date", "Priority", "Clear all"],
+        selected,
+        24,
+        theme,
     );
-
-    let mut lines = Vec::new();
-    for (i, label) in items.iter().enumerate() {
-        let is_highlighted = i == selected;
-        let bg = if is_highlighted {
-            theme.bg_tertiary
-        } else {
-            theme.bg_primary
-        };
-
-        lines.push(
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw("  "),
-            ])
-            .style(Style::default().bg(bg)),
-        );
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_default))
-        .title(" Filter ")
-        .title_style(
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(theme.bg_primary));
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .style(Style::default().bg(theme.bg_primary));
-
-    frame.render_widget(Clear, popup_area);
-    frame.render_widget(paragraph, popup_area);
 }
 
 fn render_due_date_filter_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let items = ["Overdue", "This week", "Today", "Clear filter"];
-    let height = items.len() as u16 + 2;
-    let width = 24u16.min(area.width.saturating_sub(2));
-    let popup_y = area.bottom().saturating_sub(height + 1);
-    let popup_x = area.x + 2;
-
-    let popup_area = Rect::new(
-        popup_x,
-        popup_y.min(area.bottom().saturating_sub(height)),
-        width,
-        height,
+    render_menu_popup(
+        frame,
+        area,
+        " Due Filter ",
+        &["Overdue", "This week", "Today", "Clear filter"],
+        selected,
+        24,
+        theme,
     );
-
-    let mut lines = Vec::new();
-    for (i, label) in items.iter().enumerate() {
-        let is_highlighted = i == selected;
-        let bg = if is_highlighted {
-            theme.bg_tertiary
-        } else {
-            theme.bg_primary
-        };
-
-        lines.push(
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw("  "),
-            ])
-            .style(Style::default().bg(bg)),
-        );
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_default))
-        .title(" Due Filter ")
-        .title_style(
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(theme.bg_primary));
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .style(Style::default().bg(theme.bg_primary));
-
-    frame.render_widget(Clear, popup_area);
-    frame.render_widget(paragraph, popup_area);
 }
 
 fn render_category_picker(
@@ -1347,68 +1216,15 @@ fn render_category_parent_picker(
 }
 
 fn render_sort_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let items: [(&str, SortMode); 3] = [
-        ("Default", SortMode::Default),
-        ("Due date", SortMode::DueDate),
-        ("Priority", SortMode::Priority),
-    ];
-    let height = items.len() as u16 + 2;
-    let width = 24;
-    let popup_y = area.bottom().saturating_sub(height + 1);
-    let popup_x = area.x + 2;
-
-    let popup_area = Rect::new(
-        popup_x,
-        popup_y.min(area.bottom().saturating_sub(height)),
-        width,
-        height,
+    render_menu_popup(
+        frame,
+        area,
+        " Sort ",
+        &["Default", "Due date", "Priority"],
+        selected,
+        24,
+        theme,
     );
-
-    let mut lines = Vec::new();
-    for (i, (label, _)) in items.iter().enumerate() {
-        let is_highlighted = i == selected;
-        let bg = if is_highlighted {
-            theme.bg_tertiary
-        } else {
-            theme.bg_primary
-        };
-
-        lines.push(
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(theme.text_primary)
-                        .add_modifier(if is_highlighted {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::raw("  "),
-            ])
-            .style(Style::default().bg(bg)),
-        );
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_default))
-        .title(" Sort ")
-        .title_style(
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(theme.bg_primary));
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .style(Style::default().bg(theme.bg_primary));
-
-    frame.render_widget(Clear, popup_area);
-    frame.render_widget(paragraph, popup_area);
 }
 
 fn help_file_paths() -> (String, String) {
