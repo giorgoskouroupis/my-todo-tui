@@ -746,7 +746,7 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
-        .title(" Themes [Enter select] ")
+        .title(" Themes ")
         .title_style(
             Style::default()
                 .fg(theme.accent)
@@ -1946,9 +1946,9 @@ fn render_calendar_popup(
     lines.push(
         Line::from(vec![Span::styled(
             if prompt_focused {
-                "  Tab calendar   Enter save   Esc cancel"
+                "  [Tab calendar, Enter save, Esc cancel]"
             } else {
-                "  Tab prompt   Arrows move   Pg month   t today   Del clear"
+                "  [Tab prompt, Arrows move, Pg month, t today, Del clear]"
             },
             Style::default().fg(theme.text_muted),
         )])
@@ -2079,7 +2079,7 @@ fn render_input(
         Mode::Command { .. } => {
             let line = if input.is_empty() {
                 Line::from(vec![Span::styled(
-                    "  Type to filter, Up/Down choose, Tab complete/options, Enter open/run",
+                    "  [Type to filter, Up/Down choose, Tab complete/options, Enter open/run]",
                     Style::default().fg(theme.warning),
                 )])
             } else {
@@ -2129,56 +2129,56 @@ fn render_input(
         }
         Mode::ThemePicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [up/down: navigate, Enter: select theme, Esc: cancel]",
+                "  [Up/Down preview, Enter save, Esc restore]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::ConfirmDelete { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  Y/Enter delete, N/Esc cancel, A archive",
+                "  [Y/Enter delete, N/Esc cancel, A archive]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::PriorityPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [up/down: navigate, Enter: select priority, Esc: cancel]",
+                "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::DueDateFilterPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [up/down: navigate, Enter: select filter, Esc: cancel]",
+                "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::Help => {
             let line = Line::from(vec![Span::styled(
-                "  Esc to close help",
+                "  [Esc close]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::Keybindings => {
             let line = Line::from(vec![Span::styled(
-                "  Esc to close keybindings",
+                "  [Esc close]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::CategoryCreateChoice { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [1/2 choose, Enter select, Esc cancel]",
+                "  [1/2 choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::CategoryParentPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [choose parent, Enter select, Esc cancel]",
+                "  [Up/Down choose parent, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
@@ -2204,28 +2204,28 @@ fn render_input(
         }
         Mode::CategoryFilterPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [arrows choose category filter, Enter apply, Esc cancel]",
+                "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::SortPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [up/down: navigate, Enter: select, Esc: cancel]",
+                "  [Up/Down preview, Enter keep, Esc restore]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::ArchivePicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [arrows navigate, Enter: select, Esc: cancel]",
+                "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
         }
         Mode::FilterPicker { .. } => {
             let line = Line::from(vec![Span::styled(
-                "  [arrows navigate, Enter: select, Esc: cancel]",
+                "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),
             )]);
             (line, None)
@@ -2242,9 +2242,9 @@ fn render_input(
             );
             line.spans.push(Span::styled(
                 if *prompt_focused {
-                    "  Tab calendar   Enter save"
+                    "  [Tab calendar, Enter save]"
                 } else {
-                    "  Tab prompt   calendar active"
+                    "  [Tab prompt, calendar active]"
                 },
                 Style::default().fg(if *prompt_focused {
                     theme.accent
