@@ -1368,168 +1368,81 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let key_lines = [
+    let key_lines: [(&str, &str, bool); 42] = [
         ("Global", "", true),
-        ("Ctrl+C", "Quit from any mode", false),
-        ("Ctrl+/ or Ctrl+_", "Show keybindings", false),
-        (
-            "/",
-            "Open command mode, except command/category typing",
-            false,
-        ),
+        ("Ctrl+C", "Quit", false),
+        ("Ctrl+H", "Help", false),
+        ("/", "Command mode", false),
         ("", "", false),
         ("Items", "", true),
-        ("↑/↓", "Navigate", false),
-        ("Enter", "Edit selected item, create if list empty", false),
-        (
-            "printable key",
-            "Start a new item with that character",
-            false,
-        ),
-        ("Space", "Toggle done", false),
-        ("d", "Toggle doing", false),
-        ("Delete", "Delete item", false),
-        ("p / P", "Cycle priority forward/back", false),
-        ("Alt+↑/↓", "Move item up/down", false),
-        ("u or Ctrl+Shift+Z", "Undo last delete", false),
-        ("*", "Toggle pin/star", false),
-        ("s", "Open sort picker", false),
-        ("Ctrl+K", "Open category picker", false),
-        ("Ctrl+D", "Open due-date calendar", false),
-        ("←/→", "Switch items/sidebar pane", false),
-        ("PgUp/PgDn", "Switch category filter", false),
-        ("Ctrl+PgUp/PgDn", "Switch top-level category filter", false),
-        ("", "", false),
-        ("Sidebar", "", true),
-        ("↑/↓", "Navigate categories", false),
-        ("Enter", "Select category and switch to items", false),
-        ("printable key", "Start category creation", false),
-        ("Delete", "Delete highlighted category", false),
-        ("→", "Switch to items pane", false),
-        ("PgUp/PgDn", "Switch category filter", false),
-        ("Ctrl+PgUp/PgDn", "Switch top-level category filter", false),
+        ("Enter", "Toggle done", false),
+        ("Space", "Toggle doing", false),
+        ("Delete", "Delete", false),
+        ("Ctrl+E", "Edit", false),
+        ("Ctrl+P/S-P", "Priority", false),
+        ("Ctrl+↑/↓", "Reorder", false),
+        ("Ctrl+K", "Assign cat", false),
+        ("Ctrl+D", "Due date", false),
+        ("*", "Pin", false),
+        ("←/→", "Switch pane", false),
+        ("PgUp/PgDn", "Cycle filter", false),
+        ("printable", "New item", false),
         ("", "", false),
         ("Command", "", true),
-        ("type", "Filter command list / edit command text", false),
-        ("↑/↓", "Move highlighted command", false),
-        ("Tab", "Autocomplete highlighted command/subcommand", false),
-        ("Enter", "Execute typed or highlighted command", false),
-        ("Esc", "Cancel", false),
-        ("", "", false),
-        ("Multi-select", "", true),
-        ("↑/↓", "Navigate targets", false),
-        ("Space", "Toggle current target", false),
-        ("Ctrl+A", "Delete all targets in /delete", false),
-        ("Enter", "Apply selected targets", false),
-        ("Esc", "Cancel", false),
+        ("↑/↓", "Navigate", false),
+        ("Backspace", "Back", false),
+        ("Tab", "Autocomplete", false),
         ("", "", false),
         ("Text input", "", true),
-        ("printable key", "Insert character", false),
-        ("Enter", "Submit edit/search/category/rename", false),
-        ("Esc", "Cancel or clear search", false),
-        ("←/→, Home/End", "Move cursor", false),
-        ("Shift+arrows", "Extend text selection", false),
-        ("Ctrl/Alt+←/→", "Jump by word", false),
-        ("Backspace", "Delete left", false),
-        ("Ctrl+Backspace/w", "Delete word left", false),
-        ("Delete", "Delete right", false),
-        ("Ctrl+Delete", "Delete word right", false),
-        ("Ctrl+A / Ctrl+E", "Move to start/end", false),
-        ("Ctrl+D", "Open due-date calendar while editing item", false),
-        ("Ctrl+Shift+C", "Copy selection", false),
+        ("Ctrl+←/→", "Word jump", false),
         ("Ctrl+Shift+V", "Paste", false),
         ("", "", false),
-        ("Search", "", true),
-        ("type", "Append to query", false),
-        ("Backspace/Delete", "Remove last query character", false),
-        ("Enter", "Apply search", false),
-        ("Esc", "Clear search", false),
+        ("Multi-select", "", true),
+        ("Ctrl+A", "Select all", false),
         ("", "", false),
-        ("Category creation", "", true),
-        (
-            "Enter",
-            "Submit category text / choose highlighted option",
-            false,
-        ),
-        ("1 / 2", "Choose attach/root option", false),
-        ("↑/↓", "Move choice or parent highlight", false),
-        ("Esc", "Cancel category creation", false),
+        ("Sidebar", "", true),
+        ("Ctrl+↑/↓", "Reorder / move", false),
+        ("Ctrl+K", "Move", false),
+        ("Delete", "Delete branch", false),
+        ("PgUp/PgDn", "Cycle filter", false),
+        ("printable", "Create cat", false),
         ("", "", false),
-        ("Pickers", "", true),
-        (
-            "↑/↓",
-            "Navigate theme/category/filter/archive/priority",
-            false,
-        ),
-        (
-            "Enter",
-            "Select highlighted option or typed category",
-            false,
-        ),
-        ("Category picker type", "Create category text", false),
-        ("Esc", "Cancel picker", false),
-        (
-            "Sort: p / d / n",
-            "Priority / due date / default sort",
-            false,
-        ),
-        ("", "", false),
-        ("Due date", "", true),
-        ("Tab", "Switch calendar/prompt", false),
-        ("Calendar ←/→", "Move selected date by day", false),
-        ("Calendar ↑/↓", "Move selected date by week", false),
-        ("PgUp/PgDn", "Previous/next month in calendar", false),
-        ("Ctrl+T", "Jump to today", false),
-        ("Prompt digits/-", "Edit YYYY-MM-DD text", false),
-        ("Prompt arrows/Home/End", "Move prompt cursor", false),
-        ("Prompt Backspace/Delete", "Edit prompt text", false),
-        ("Calendar Delete", "Clear due date", false),
-        ("Enter", "Save valid date", false),
-        ("Esc", "Cancel", false),
-        ("", "", false),
-        ("Popups", "", true),
-        (
-            "Delete confirm",
-            "Y/Enter delete, N/Esc cancel, A archive",
-            false,
-        ),
-        ("Help/keybindings", "q or Esc closes", false),
+        ("Calendar", "", true),
+        ("Tab", "Focus toggle", false),
+        ("Ctrl+T", "Today", false),
+        ("Delete", "Clear date", false),
     ];
 
-    let split_at = key_lines.len().div_ceil(2);
-    let left = &key_lines[..split_at];
-    let right = &key_lines[split_at..];
-    let cell_width = 52usize;
-    let key_width = 18usize;
-    let desc_width = cell_width.saturating_sub(key_width + 4);
+    let cell_w = 38usize;
+    let key_w = 14usize;
+    let desc_w = cell_w.saturating_sub(key_w + 4);
+    let split = key_lines.len().div_ceil(2);
+    let left = &key_lines[..split];
+    let right = &key_lines[split..];
     let mut lines = Vec::new();
-
-    for (i, entry) in left.iter().enumerate() {
+    let bg = theme.bg_secondary;
+no i 
+    for i in 0..left.len() {
         let mut spans = Vec::new();
-        push_keybinding_cell(&mut spans, *entry, cell_width, key_width, desc_width, theme);
-        spans.push(Span::raw("  "));
+        push_cell(&mut spans, left[i], cell_w, key_w, desc_w, theme);
         if let Some(entry) = right.get(i) {
-            push_keybinding_cell(&mut spans, *entry, cell_width, key_width, desc_width, theme);
+            spans.push(Span::raw(" "));
+            push_cell(&mut spans, *entry, cell_w, key_w, desc_w, theme);
         }
-        lines.push(Line::from(spans).style(Style::default().bg(theme.bg_secondary)));
+        lines.push(Line::from(spans).style(Style::default().bg(bg)));
     }
 
-    let width = 110.min(area.width.saturating_sub(2));
+    let width = (cell_w * 2 + 4).min(area.width.saturating_sub(2) as usize) as u16;
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
     let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
-
     let popup_area = Rect::new(popup_x, popup_y, width, height);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(" Keybindings ")
-        .title_style(
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )
+        .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
         .style(Style::default().bg(theme.bg_secondary));
 
     let paragraph = Paragraph::new(lines)
@@ -1540,45 +1453,37 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(paragraph, popup_area);
 }
 
-fn push_keybinding_cell<'a>(
+fn push_cell<'a>(
     spans: &mut Vec<Span<'a>>,
-    entry: (&str, &str, bool),
-    cell_width: usize,
-    key_width: usize,
-    desc_width: usize,
+    (key, desc, is_header): (&str, &str, bool),
+    cell_w: usize,
+    key_w: usize,
+    desc_w: usize,
     theme: &Theme,
 ) {
-    let (key, desc, is_header) = entry;
     if is_header {
+        let pad = cell_w.saturating_sub(key.len() + 2);
         spans.push(Span::styled(
-            format!("  {:<width$}", key, width = cell_width.saturating_sub(2)),
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
+            format!("  {key}{:pad$}", "", pad = pad),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ));
     } else if key.is_empty() {
-        spans.push(Span::raw(format!("{:<width$}", "", width = cell_width)));
+        spans.push(Span::raw(format!("{:cell$}", "", cell = cell_w)));
     } else {
+        let truncated = if desc.len() > desc_w {
+            let mut s: String = desc.chars().take(desc_w).collect();
+            if desc_w > 1 { s.truncate(desc_w.saturating_sub(1)); s.push('…'); }
+            s
+        } else {
+            format!("{desc:<desc_w$}")
+        };
         spans.push(Span::raw("    "));
         spans.push(Span::styled(
-            format!("{:<width$}", key, width = key_width),
+            format!("{key:<key_w$}"),
             Style::default().fg(theme.text_secondary),
         ));
-        spans.push(Span::styled(
-            truncate_for_cell(desc, desc_width),
-            Style::default().fg(theme.text_primary),
-        ));
+        spans.push(Span::styled(truncated, Style::default().fg(theme.text_primary)));
     }
-}
-
-fn truncate_for_cell(text: &str, width: usize) -> String {
-    let mut chars = text.chars();
-    let mut truncated: String = chars.by_ref().take(width).collect();
-    if chars.next().is_some() && width > 1 {
-        truncated.pop();
-        truncated.push('…');
-    }
-    format!("{truncated:<width$}")
 }
 
 fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], theme: &Theme) {

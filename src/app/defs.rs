@@ -175,7 +175,8 @@ pub enum Action {
     CategorySelect(usize),
     CategoryFilterSelect(usize),
     CategoryFilterParent(usize),
-    CategoryParent,
+
+
     AddCategory(String),
     AddCategoryChoice(usize),
     SelectCategoryParent(usize),

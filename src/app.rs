@@ -344,9 +344,7 @@ impl App {
             .map_or(0, |idx| idx + 1)
     }
 
-    fn parent_category_index(&self) -> usize {
-        self.parent_category_index_for(self.category_index)
-    }
+
 
     fn selected_category_path(&self) -> Option<String> {
         if self.category_index == 0 {
@@ -620,9 +618,6 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if is_keybindings_shortcut(key) {
-            return Some(Action::ExecuteCommand("keybindings".to_string()));
-        }
         if key.code == KeyCode::Char('/')
             && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
         {
@@ -661,9 +656,6 @@ impl App {
             match key.code {
                 KeyCode::Left if self.pane == Pane::Items => return Some(Action::SwitchPane),
                 KeyCode::Right if self.pane == Pane::Categories => return Some(Action::SwitchPane),
-                KeyCode::Backspace if matches!(self.mode, Mode::Normal) => {
-                    return Some(Action::CategoryParent);
-                }
                 KeyCode::PageUp => {
                     return Some(Action::SwitchCategoryFilter(-1, true));
                 }
@@ -2126,14 +2118,6 @@ impl App {
                     selected: self.parent_category_index_for(idx),
                 };
             }
-            Action::CategoryParent => {
-                let parent_idx = self.parent_category_index();
-                if parent_idx != self.category_index {
-                    self.set_category_index(parent_idx);
-                    self.pane = Pane::Items;
-                }
-                self.mode = Mode::Normal;
-            }
             Action::AddCategory(name) => {
                 if let Some(normalized) = normalize_category(&name) {
                     self.input.clear();
@@ -2318,10 +2302,6 @@ fn sort_index(mode: SortMode) -> usize {
         SortMode::DueDate => 1,
         SortMode::Priority => 2,
     }
-}
-
-fn is_keybindings_shortcut(key: KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('/')
 }
 
 fn is_popup_list_mode(mode: &Mode) -> bool {

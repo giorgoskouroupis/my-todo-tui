@@ -545,67 +545,6 @@ fn category_filter_picker_jumps_to_selected_category_and_shows_only_that_branch(
 }
 
 #[test]
-fn backspace_from_nested_category_filter_moves_to_parent() {
-    let mut data = TodoData::new();
-    data.add_category("Work/api");
-    let mut app = test_app(data);
-    let child_idx = app
-        .data
-        .category_entries()
-        .iter()
-        .position(|entry| entry.path == "Work/api")
-        .map(|idx| idx + 1)
-        .unwrap();
-
-    app.handle_action(Action::CategoryFilterSelect(child_idx));
-    if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)) {
-        app.handle_action(action);
-    }
-
-    assert_eq!(app.category_filter.as_deref(), Some("Work"));
-    assert_eq!(app.data.category_entries()[app.category_index - 1].depth, 0);
-}
-
-#[test]
-fn nested_category_back_restores_parent_item_selection() {
-    let mut data = TodoData::new();
-    let first_id = data.add("first work task");
-    data.set_category(first_id, Some("Work".to_string()));
-    let api_id = data.add("api task");
-    data.set_category(api_id, Some("Work/api".to_string()));
-    let second_id = data.add("second work task");
-    data.set_category(second_id, Some("Work".to_string()));
-    data.add_category("Work/api");
-    let mut app = test_app(data);
-
-    let entries = app.data.category_entries();
-    let work_idx = entries
-        .iter()
-        .position(|entry| entry.path == "Work")
-        .map(|idx| idx + 1)
-        .unwrap();
-    let api_idx = entries
-        .iter()
-        .position(|entry| entry.path == "Work/api")
-        .map(|idx| idx + 1)
-        .unwrap();
-
-    app.handle_action(Action::CategoryFilterSelect(work_idx));
-    app.selected_index = 2;
-    app.handle_action(Action::CategoryFilterSelect(api_idx));
-
-    assert_eq!(app.category_filter.as_deref(), Some("Work/api"));
-    assert_eq!(app.selected_index(), 0);
-
-    if let Some(action) = app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)) {
-        app.handle_action(action);
-    }
-
-    assert_eq!(app.category_filter.as_deref(), Some("Work"));
-    assert_eq!(app.selected_index(), 2);
-}
-
-#[test]
 fn sidebar_category_navigation_restores_saved_item_selection() {
     let mut data = TodoData::new();
     let first_id = data.add("first work task");
@@ -1160,16 +1099,6 @@ fn get_filtered_commands_keybindings_matches() {
     let results = get_filtered_commands("keybindings");
     assert_eq!(results.len(), 1, "keybindings should match exactly one");
     assert_eq!(results[0].0, "keybindings");
-}
-
-#[test]
-fn ctrl_slash_opens_keybindings() {
-    let mut app = test_app(TodoData::new());
-    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL));
-    assert!(matches!(
-        action,
-        Some(Action::ExecuteCommand(command)) if command == "keybindings"
-    ));
 }
 
 #[test]
