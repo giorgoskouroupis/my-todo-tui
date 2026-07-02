@@ -86,7 +86,7 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
     let has_selection = idx < items.len();
     let selected_id = has_selection.then(|| items[idx].id);
 
-    if key.modifiers == KeyModifiers::CONTROL {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Up => {
                 return selected_id.map(|id| Action::Reorder(id, -1));
@@ -101,8 +101,11 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
                     Some(Action::StartNewItem)
                 };
             }
-            KeyCode::Char('p') => {
+            KeyCode::Char('p') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
                 return selected_id.map(|id| Action::CyclePriority(id, true));
+            }
+            KeyCode::Char('P') | KeyCode::Char('p') => {
+                return selected_id.map(|id| Action::CyclePriority(id, false));
             }
             KeyCode::Char('*') => {
                 return selected_id.map(Action::TogglePin);
@@ -110,40 +113,16 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
             _ => {}
         }
     }
-    if key.modifiers == KeyModifiers::ALT {
-        match key.code {
-            KeyCode::Up => {
-                return selected_id.map(|id| Action::Reorder(id, -1));
-            }
-            KeyCode::Down => {
-                return selected_id.map(|id| Action::Reorder(id, 1));
-            }
-            KeyCode::Char('p') => {
-                return selected_id.map(|id| Action::CyclePriority(id, false));
-            }
-            _ => {}
-        }
-    }
-
     match key.code {
-        KeyCode::Up
-            if !key.modifiers.contains(KeyModifiers::ALT)
-                && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        KeyCode::Up if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::SelectPrev)
         }
-        KeyCode::Down
-            if !key.modifiers.contains(KeyModifiers::ALT)
-                && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        KeyCode::Down if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::SelectNext)
         }
         KeyCode::Enter => selected_id.map(Action::ToggleDone),
         KeyCode::Char(' ') => selected_id.map(Action::ToggleDoing),
-        KeyCode::Char('d') if key.modifiers.is_empty() => selected_id.map(Action::ToggleDoing),
         KeyCode::Delete => selected_id.map(Action::DeleteItem),
-        KeyCode::Char('p') => selected_id.map(|id| Action::CyclePriority(id, true)),
-        KeyCode::Char('P') => selected_id.map(|id| Action::CyclePriority(id, false)),
         KeyCode::Char('*') => selected_id.map(Action::TogglePin),
         KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
             Some(Action::OpenCategoryPicker)
@@ -308,6 +287,27 @@ pub fn handle_sidebar(
     categories: &[CategoryEntry],
     category_index: usize,
 ) -> Option<Action> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Up | KeyCode::Down
+                if category_index > 0 && category_index <= categories.len() =>
+            {
+                let name = categories[category_index - 1].path.clone();
+                if name.contains('/') {
+                    let dir = if matches!(key.code, KeyCode::Up) { -1 } else { 1 };
+                    return Some(Action::ReorderCategory(name, dir));
+                }
+                return Some(Action::OpenCategoryMovePicker(name));
+            }
+            KeyCode::Char('k')
+                if category_index > 0 && category_index <= categories.len() =>
+            {
+                let name = categories[category_index - 1].path.clone();
+                return Some(Action::OpenCategoryMovePicker(name));
+            }
+            _ => {}
+        }
+    }
     match key.code {
         KeyCode::Up => Some(Action::SelectPrev),
         KeyCode::Down => Some(Action::SelectNext),
@@ -439,6 +439,7 @@ pub fn handle_due_date_calendar(
         KeyCode::Down => Some(Action::CalendarMove(7)),
         KeyCode::PageUp => Some(Action::CalendarMonth(-1)),
         KeyCode::PageDown => Some(Action::CalendarMonth(1)),
+        KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => Some(Action::CalendarToday),
         KeyCode::Delete => Some(Action::CalendarClear),
         KeyCode::Enter => Some(Action::SubmitDueDate),
         KeyCode::Esc => Some(Action::CancelDueDate),

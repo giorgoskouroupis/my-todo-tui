@@ -177,20 +177,21 @@ impl TodoData {
     }
 
     pub fn categories_for_archived(&self, archived: bool) -> Vec<String> {
-        let mut cats: Vec<String> = self
-            .items
-            .iter()
-            .filter(|i| i.archived == archived)
-            .filter_map(|i| i.category.clone())
-            .collect();
         let stored = if archived {
             &self.archived_categories
         } else {
             &self.categories
         };
-        cats.extend(stored.iter().cloned());
-        cats.sort();
-        cats.dedup();
+        let mut cats: Vec<String> = stored.clone();
+        for item in &self.items {
+            if item.archived == archived {
+                if let Some(ref cat) = item.category {
+                    if !cats.contains(cat) {
+                        cats.push(cat.clone());
+                    }
+                }
+            }
+        }
         cats
     }
 
@@ -360,6 +361,33 @@ impl TodoData {
         };
 
         self.items.sort_by_key(|i| i.order);
+        true
+    }
+
+    pub fn reorder_category(&mut self, path: &str, direction: i32) -> bool {
+        let Some((parent, _)) = path.split_once('/') else {
+            return false;
+        };
+        let idx = match self.categories.iter().position(|c| c == path) {
+            Some(i) => i,
+            None => return false,
+        };
+        let prefix = format!("{parent}/");
+        let group_start = self.categories[..idx]
+            .iter()
+            .rposition(|c| !c.starts_with(&prefix))
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        let group_end = self.categories[idx + 1..]
+            .iter()
+            .position(|c| !c.starts_with(&prefix))
+            .map(|pos| idx + 1 + pos)
+            .unwrap_or(self.categories.len());
+        let new_idx = idx as i32 + direction;
+        if new_idx < group_start as i32 || new_idx >= group_end as i32 {
+            return false;
+        }
+        self.categories.swap(idx, new_idx as usize);
         true
     }
 

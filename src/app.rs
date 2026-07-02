@@ -497,7 +497,10 @@ impl App {
             Mode::ArchivePicker { .. } => Some(7),
             Mode::FilterPicker { .. } => Some(4),
             Mode::DueDateFilterPicker { .. } => Some(3),
-            Mode::CategoryPicker { .. } => Some(self.categories().len()),
+            Mode::CategoryPicker { target, .. } => Some(match target {
+                CategoryPickerTarget::MoveCategory(_) => self.root_categories().len(),
+                CategoryPickerTarget::AssignItem => self.categories().len(),
+            }),
             Mode::CategoryFilterPicker { .. } => Some(self.category_entries().len()),
             Mode::CategoryCreateChoice { .. } => Some(1),
             Mode::CategoryParentPicker { .. } => {
@@ -662,16 +665,10 @@ impl App {
                     return Some(Action::CategoryParent);
                 }
                 KeyCode::PageUp => {
-                    return Some(Action::SwitchCategoryFilter(
-                        -1,
-                        key.modifiers.contains(KeyModifiers::CONTROL),
-                    ));
+                    return Some(Action::SwitchCategoryFilter(-1, true));
                 }
                 KeyCode::PageDown => {
-                    return Some(Action::SwitchCategoryFilter(
-                        1,
-                        key.modifiers.contains(KeyModifiers::CONTROL),
-                    ));
+                    return Some(Action::SwitchCategoryFilter(1, true));
                 }
                 _ => {}
             }
@@ -1125,6 +1122,17 @@ impl App {
                     self.mark_dirty();
                 }
                 self.clamp_selection();
+            }
+            Action::ReorderCategory(path, direction) => {
+                if self.data.reorder_category(&path, direction) {
+                    let entries = self.category_entries();
+                    if let Some(pos) = entries.iter().position(|e| e.path == path) {
+                        self.category_index = pos + 1;
+                    }
+                    self.mark_dirty();
+                } else if path.contains('/') {
+                    return self.handle_action(Action::OpenCategoryMovePicker(path));
+                }
             }
             Action::ApplySearch => {
                 self.mode = Mode::Normal;
@@ -2004,6 +2012,12 @@ impl App {
                     self.input.set_text(&date);
                 }
             }
+            Action::CalendarToday => {
+                if let Mode::DueDateCalendar { selected, .. } = &mut self.mode {
+                    *selected = crate::date::Date::today();
+                    self.input.set_text(&selected.iso());
+                }
+            }
             Action::CalendarClear => {
                 let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
                     Mode::DueDateCalendar {
@@ -2056,6 +2070,14 @@ impl App {
                     target: CategoryPickerTarget::AssignItem,
                 };
             }
+            Action::OpenCategoryMovePicker(category) => {
+                self.push_command_popup_back_target("move");
+                self.input.clear();
+                self.mode = Mode::CategoryPicker {
+                    selected: 0,
+                    target: CategoryPickerTarget::MoveCategory(category),
+                };
+            }
             Action::CategorySelect(idx) => {
                 let picker_target = match &self.mode {
                     Mode::CategoryPicker { target, .. } => Some(target.clone()),
@@ -2078,10 +2100,11 @@ impl App {
                             }
                         }
                         CategoryPickerTarget::MoveCategory(old_category) => {
+                            let root_cats = self.root_categories();
                             let destination = if idx == 0 {
                                 None
                             } else {
-                                cats.get(idx - 1).map(String::as_str)
+                                root_cats.get(idx - 1).map(String::as_str)
                             };
                             self.move_category_to(&old_category, destination);
                         }

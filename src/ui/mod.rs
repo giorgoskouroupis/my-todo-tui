@@ -898,7 +898,13 @@ fn render_category_picker(
     categories: &[String],
     theme: &Theme,
 ) {
-    let total = categories.len() + 1;
+    let is_move = matches!(target, CategoryPickerTarget::MoveCategory(_));
+    let display_categories: Vec<&str> = if is_move {
+        categories.iter().filter(|c| !c.contains('/')).map(|s| s.as_str()).collect()
+    } else {
+        categories.iter().map(|s| s.as_str()).collect()
+    };
+    let total = display_categories.len() + 1;
     let height = total as u16 + 2;
     let width = 30;
     let popup_y = area.bottom().saturating_sub(height + 1);
@@ -919,7 +925,7 @@ fn render_category_picker(
     for (i, label) in entries
         .iter()
         .copied()
-        .chain(categories.iter().map(|s| s.as_str()))
+        .chain(display_categories.iter().copied())
         .enumerate()
     {
         let is_highlighted = i == selected;
@@ -1473,7 +1479,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Calendar ←/→", "Move selected date by day", false),
         ("Calendar ↑/↓", "Move selected date by week", false),
         ("PgUp/PgDn", "Previous/next month in calendar", false),
-        ("t", "Jump to today", false),
+        ("Ctrl+T", "Jump to today", false),
         ("Prompt digits/-", "Edit YYYY-MM-DD text", false),
         ("Prompt arrows/Home/End", "Move prompt cursor", false),
         ("Prompt Backspace/Delete", "Edit prompt text", false),
