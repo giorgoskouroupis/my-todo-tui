@@ -22,46 +22,30 @@ fn handle_text_input_key(key: KeyEvent, input: &mut crate::ui::input::InputBuffe
             true
         }
         KeyCode::Left => {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::ALT)
-            {
-                input.move_word_left(false);
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                input.move_word_left();
             } else {
-                input.move_left(key.modifiers.contains(KeyModifiers::SHIFT));
+                input.move_left();
             }
             true
         }
         KeyCode::Right => {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::ALT)
-            {
-                input.move_word_right(false);
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                input.move_word_right();
             } else {
-                input.move_right(key.modifiers.contains(KeyModifiers::SHIFT));
+                input.move_right();
             }
             true
         }
         KeyCode::Home => {
-            input.move_home(key.modifiers.contains(KeyModifiers::SHIFT));
+            input.move_home();
             true
         }
         KeyCode::End => {
-            input.move_end(key.modifiers.contains(KeyModifiers::SHIFT));
-            true
-        }
-        KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
-            input.move_home(false);
-            true
-        }
-        KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
-            input.move_end(false);
+            input.move_end();
             true
         }
         KeyCode::Char('h') if key.modifiers == KeyModifiers::CONTROL => {
-            input.delete_word_back();
-            true
-        }
-        KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
             input.delete_word_back();
             true
         }
@@ -102,6 +86,45 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
     let has_selection = idx < items.len();
     let selected_id = has_selection.then(|| items[idx].id);
 
+    if key.modifiers == KeyModifiers::CONTROL {
+        match key.code {
+            KeyCode::Up => {
+                return selected_id.map(|id| Action::Reorder(id, -1));
+            }
+            KeyCode::Down => {
+                return selected_id.map(|id| Action::Reorder(id, 1));
+            }
+            KeyCode::Char('e') => {
+                return if has_selection {
+                    Some(Action::EditItem(selected_id.unwrap()))
+                } else {
+                    Some(Action::StartNewItem)
+                };
+            }
+            KeyCode::Char('p') => {
+                return selected_id.map(|id| Action::CyclePriority(id, true));
+            }
+            KeyCode::Char('*') => {
+                return selected_id.map(Action::TogglePin);
+            }
+            _ => {}
+        }
+    }
+    if key.modifiers == KeyModifiers::ALT {
+        match key.code {
+            KeyCode::Up => {
+                return selected_id.map(|id| Action::Reorder(id, -1));
+            }
+            KeyCode::Down => {
+                return selected_id.map(|id| Action::Reorder(id, 1));
+            }
+            KeyCode::Char('p') => {
+                return selected_id.map(|id| Action::CyclePriority(id, false));
+            }
+            _ => {}
+        }
+    }
+
     match key.code {
         KeyCode::Up
             if !key.modifiers.contains(KeyModifiers::ALT)
@@ -115,32 +138,12 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
         {
             Some(Action::SelectNext)
         }
-        KeyCode::Enter => {
-            if has_selection {
-                Some(Action::EditItem(selected_id.unwrap()))
-            } else {
-                Some(Action::StartNewItem)
-            }
-        }
-        KeyCode::Char(' ') => selected_id.map(Action::ToggleDone),
+        KeyCode::Enter => selected_id.map(Action::ToggleDone),
+        KeyCode::Char(' ') => selected_id.map(Action::ToggleDoing),
         KeyCode::Char('d') if key.modifiers.is_empty() => selected_id.map(Action::ToggleDoing),
         KeyCode::Delete => selected_id.map(Action::DeleteItem),
         KeyCode::Char('p') => selected_id.map(|id| Action::CyclePriority(id, true)),
         KeyCode::Char('P') => selected_id.map(|id| Action::CyclePriority(id, false)),
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
-            selected_id.map(|id| Action::Reorder(id, -1))
-        }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
-            selected_id.map(|id| Action::Reorder(id, 1))
-        }
-        KeyCode::Char('u') => Some(Action::UndoDelete),
-        KeyCode::Char('z') if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-            Some(Action::UndoDelete)
-        }
-        KeyCode::Char('Z') if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-            Some(Action::UndoDelete)
-        }
-        KeyCode::Char('s') => Some(Action::StartSortPicker),
         KeyCode::Char('*') => selected_id.map(Action::TogglePin),
         KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
             Some(Action::OpenCategoryPicker)
@@ -234,15 +237,9 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
         KeyCode::Enter => Some(Action::SubmitEdit),
         KeyCode::Esc => Some(Action::CancelEdit),
         _ => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
-                return Some(Action::SetDueDate);
-            }
-
             if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
-                match key.code {
-                    KeyCode::Char('C') => return Some(Action::Copy),
-                    KeyCode::Char('V') => return Some(Action::Paste),
-                    _ => {}
+                if let KeyCode::Char('V') = key.code {
+                    return Some(Action::Paste);
                 }
             }
 
@@ -442,7 +439,6 @@ pub fn handle_due_date_calendar(
         KeyCode::Down => Some(Action::CalendarMove(7)),
         KeyCode::PageUp => Some(Action::CalendarMonth(-1)),
         KeyCode::PageDown => Some(Action::CalendarMonth(1)),
-        KeyCode::Char('t') => Some(Action::CalendarToday),
         KeyCode::Delete => Some(Action::CalendarClear),
         KeyCode::Enter => Some(Action::SubmitDueDate),
         KeyCode::Esc => Some(Action::CancelDueDate),

@@ -9,7 +9,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, Stdout};
 
-use crate::clip::Clipboard;
 use crate::config;
 use crate::data::{
     category_matches, normalize_category, CategoryEntry, Priority, TodoData, TodoItem,
@@ -33,7 +32,6 @@ pub struct App {
     pub selected_index: usize,
     pub input: InputBuffer,
     pub mode: Mode,
-    pub clip: Clipboard,
     pub filter: String,
     pub priority_filter: Option<Priority>,
     pub due_filter: Option<DueFilter>,
@@ -61,7 +59,6 @@ impl App {
             selected_index: 0,
             input: InputBuffer::new(),
             mode: Mode::Normal,
-            clip: Clipboard::new(),
             filter: String::new(),
             priority_filter: None,
             due_filter: None,
@@ -630,6 +627,22 @@ impl App {
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
+        }
+        let is_text_mode = matches!(
+            self.mode,
+            Mode::Editing { .. }
+                | Mode::Command { .. }
+                | Mode::Searching
+                | Mode::CategoryAdd { .. }
+                | Mode::RenameInput { .. }
+                | Mode::CategoryPicker { .. }
+                | Mode::DueDateCalendar { .. }
+        );
+        if key.code == KeyCode::Char('h')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !is_text_mode
+        {
+            return Some(Action::ExecuteCommand("help".to_string()));
         }
         if key.code == KeyCode::Char('d')
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1555,9 +1568,7 @@ impl App {
                     match cmd {
                         MultiSelectCmd::Delete => {
                             for id in &selected {
-                                if let Some(item) = self.data.delete(*id) {
-                                    self.clip.cut(item);
-                                }
+                                self.data.delete(*id);
                             }
                             for category in &selected_categories {
                                 let ids: Vec<u64> = self
@@ -1568,9 +1579,7 @@ impl App {
                                     .map(|i| i.id)
                                     .collect();
                                 for id in ids {
-                                    if let Some(item) = self.data.delete(id) {
-                                        self.clip.cut(item);
-                                    }
+                                    self.data.delete(id);
                                 }
                                 self.data.remove_category(category);
                             }
@@ -1642,9 +1651,7 @@ impl App {
                 } = mode
                 {
                     for id in ids {
-                        if let Some(item) = self.data.delete(id) {
-                            self.clip.cut(item);
-                        }
+                        self.data.delete(id);
                     }
                     for name in category_names {
                         self.data.remove_category(&name);
@@ -1901,24 +1908,11 @@ impl App {
                     other => other,
                 };
             }
-            Action::Copy => {
-                if let Some(text) = self.input.selected_text() {
-                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                        let _ = cb.set_text(text);
-                    }
-                }
-            }
             Action::Paste => {
                 if let Ok(mut cb) = arboard::Clipboard::new() {
                     if let Ok(text) = cb.get_text() {
                         self.input.insert_str(&text);
                     }
-                }
-            }
-            Action::UndoDelete => {
-                if let Some(item) = self.clip.paste() {
-                    self.data.restore(item);
-                    self.mark_dirty();
                 }
             }
             Action::TogglePin(id) => {
@@ -2009,13 +2003,6 @@ impl App {
                 if let Some(date) = next {
                     self.input.set_text(&date);
                 }
-            }
-            Action::CalendarToday => {
-                let today = Date::today();
-                if let Mode::DueDateCalendar { selected, .. } = &mut self.mode {
-                    *selected = today;
-                }
-                self.input.set_text(&today.iso());
             }
             Action::CalendarClear => {
                 let (edit_id, saved_text, from_new, from_normal) = match &self.mode {
@@ -2254,12 +2241,6 @@ impl App {
                 self.input.clear();
                 self.mode = Mode::Normal;
             }
-            Action::StartSortPicker => {
-                self.mode = Mode::SortPicker {
-                    selected: sort_index(self.sort_mode),
-                    original_sort: self.sort_mode,
-                };
-            }
             Action::SortSelect(idx) => {
                 if let Some(mode) = sort_by_index(idx) {
                     self.sort_mode = mode;
@@ -2317,8 +2298,7 @@ fn sort_index(mode: SortMode) -> usize {
 }
 
 fn is_keybindings_shortcut(key: KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('_'))
+    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('/')
 }
 
 fn is_popup_list_mode(mode: &Mode) -> bool {

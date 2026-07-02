@@ -127,9 +127,9 @@ pub fn render_item(
     line1.push(Span::raw(" "));
     lines.push(Line::from(line1));
 
-    // Line 2+: text at char 4
+    // Line 2+: text at char 2
     for (i, seg) in wrapped.iter().enumerate() {
-        let mut spans = vec![Span::raw("     ")];
+        let mut spans = vec![Span::raw("  ")];
         if i == 0 {
             spans.extend(highlight_matches(seg, filter, title_style, match_style));
             if let Some(ref cat) = item.category {

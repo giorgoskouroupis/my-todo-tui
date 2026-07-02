@@ -1260,11 +1260,6 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::styled(
-            "  /command or /<alias> — run a command",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
             "  /help           — this screen",
             Style::default().fg(theme.text_primary),
         ))
@@ -1276,11 +1271,6 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         .style(Style::default().bg(theme.bg_secondary)),
         Line::from(Span::styled(
             "  /filter         — filter items (due, priority, category, archived)",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /search <q>     — filter items by text",
             Style::default().fg(theme.text_primary),
         ))
         .style(Style::default().bg(theme.bg_secondary)),
@@ -1767,9 +1757,9 @@ fn render_calendar_popup(
     lines.push(
         Line::from(vec![Span::styled(
             if prompt_focused {
-                "  [Tab calendar, Enter save, Esc cancel]"
+                "  [Tab cal, Enter save, Esc cancel]"
             } else {
-                "  [Tab prompt, Arrows move, Pg month, t today, Del clear]"
+                "  [Tab prompt, Arrows, Pg, Del clear]"
             },
             Style::default().fg(theme.warning),
         )])

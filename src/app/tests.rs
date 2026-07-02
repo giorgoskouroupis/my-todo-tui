@@ -5,7 +5,6 @@ use super::{
     get_completions, get_filtered_commands, resolve_command_input, theme_index_by_name, Action,
     App, CategoryPickerTarget, Mode, MultiSelectCmd, Pane, RenameTarget, SortMode,
 };
-use crate::clip::Clipboard;
 use crate::data::TodoData;
 use crate::ui::input::InputBuffer;
 use crate::ui::theme::Theme;
@@ -17,7 +16,6 @@ fn test_app(data: TodoData) -> App {
         selected_index: 0,
         input: InputBuffer::new(),
         mode: Mode::Normal,
-        clip: Clipboard::new(),
         filter: String::new(),
         priority_filter: None,
         due_filter: None,
@@ -1175,11 +1173,22 @@ fn ctrl_slash_opens_keybindings() {
 }
 
 #[test]
-fn ctrl_underscore_opens_keybindings_for_terminal_ctrl_slash() {
+fn ctrl_h_opens_help_from_normal_mode() {
     let mut app = test_app(TodoData::new());
-    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL));
+    app.mode = Mode::Normal;
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
     assert!(matches!(
         action,
-        Some(Action::ExecuteCommand(command)) if command == "keybindings"
+        Some(Action::ExecuteCommand(command)) if command == "help"
     ));
+}
+
+#[test]
+fn ctrl_h_deletes_word_back_in_editing_mode() {
+    let mut app = test_app(TodoData::new());
+    app.mode = Mode::Editing { edit_id: None };
+    app.input.insert_str("hello world");
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    assert!(action.is_none());
+    assert_eq!(app.input.text(), "hello ");
 }

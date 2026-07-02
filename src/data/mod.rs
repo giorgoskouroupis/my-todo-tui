@@ -116,10 +116,6 @@ impl TodoData {
         id
     }
 
-    pub fn restore(&mut self, item: TodoItem) {
-        self.items.push(item);
-    }
-
     pub fn update_text(&mut self, id: u64, text: &str) -> bool {
         let text = text.trim();
         if text.is_empty() || text.len() > 500 {
