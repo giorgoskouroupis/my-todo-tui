@@ -618,6 +618,11 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
+        {
+            return Some(Action::ExecuteCommand("keybindings".to_string()));
+        }
         if key.code == KeyCode::Char('/')
             && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
         {

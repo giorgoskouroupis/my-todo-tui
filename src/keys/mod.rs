@@ -124,7 +124,7 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
         KeyCode::Char(' ') => selected_id.map(Action::ToggleDoing),
         KeyCode::Delete => selected_id.map(Action::DeleteItem),
         KeyCode::Char('*') => selected_id.map(Action::TogglePin),
-        KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
+        KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
             Some(Action::OpenCategoryPicker)
         }
         KeyCode::Char('/') => Some(Action::StartCommand),
@@ -299,7 +299,7 @@ pub fn handle_sidebar(
                 }
                 return Some(Action::OpenCategoryMovePicker(name));
             }
-            KeyCode::Char('k')
+            KeyCode::Char('o')
                 if category_index > 0 && category_index <= categories.len() =>
             {
                 let name = categories[category_index - 1].path.clone();

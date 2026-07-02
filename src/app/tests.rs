@@ -1102,6 +1102,16 @@ fn get_filtered_commands_keybindings_matches() {
 }
 
 #[test]
+fn ctrl_k_opens_keybindings() {
+    let mut app = test_app(TodoData::new());
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        action,
+        Some(Action::ExecuteCommand(command)) if command == "keybindings"
+    ));
+}
+
+#[test]
 fn ctrl_h_opens_help_from_normal_mode() {
     let mut app = test_app(TodoData::new());
     app.mode = Mode::Normal;

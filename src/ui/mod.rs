@@ -1421,7 +1421,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
     let right = &key_lines[split..];
     let mut lines = Vec::new();
     let bg = theme.bg_secondary;
-no i 
+
     for i in 0..left.len() {
         let mut spans = Vec::new();
         push_cell(&mut spans, left[i], cell_w, key_w, desc_w, theme);
