@@ -5,3 +5,6 @@ todo-tui-*.log
 *.swp
 *.swo
 .venv/
+
+result
+result-*
