@@ -24,18 +24,7 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [
-          cargo
-          rustc
-          uv
-          python312
-        ];
-
-        shellHook = ''
-          export UV_TOOL_DIR="$PWD/.uv-tools"
-          export UV_TOOL_BIN_DIR="$PWD/.uv-tools/bin"
-          export PATH="$UV_TOOL_BIN_DIR:$PATH"
-        '';
+        packages = with pkgs; [ cargo rustc ];
       };
     };
 }
