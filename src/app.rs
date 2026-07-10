@@ -618,8 +618,19 @@ impl App {
     }
 
     fn dispatch_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL)
-            && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
+        let is_text_mode = matches!(
+            self.mode,
+            Mode::Editing { .. }
+                | Mode::Command { .. }
+                | Mode::Searching
+                | Mode::CategoryAdd { .. }
+                | Mode::RenameInput { .. }
+                | Mode::CategoryPicker { .. }
+                | Mode::DueDateCalendar { .. }
+        );
+        if key.code == KeyCode::Char('k')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !is_text_mode
         {
             return Some(Action::ExecuteCommand("keybindings".to_string()));
         }
@@ -631,16 +642,6 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Some(Action::Quit);
         }
-        let is_text_mode = matches!(
-            self.mode,
-            Mode::Editing { .. }
-                | Mode::Command { .. }
-                | Mode::Searching
-                | Mode::CategoryAdd { .. }
-                | Mode::RenameInput { .. }
-                | Mode::CategoryPicker { .. }
-                | Mode::DueDateCalendar { .. }
-        );
         if key.code == KeyCode::Char('h')
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && !is_text_mode

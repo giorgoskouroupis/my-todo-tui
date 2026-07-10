@@ -7,7 +7,22 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+
+      todo-tui = pkgs.rustPlatform.buildRustPackage {
+        pname = "todo-tui";
+        version = "0.7.4";
+        src = ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+        meta.mainProgram = "todo-tui";
+      };
     in {
+      packages.${system}.default = todo-tui;
+
+      apps.${system}.default = {
+        type = "app";
+        program = "${todo-tui}/bin/todo-tui";
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           cargo

@@ -147,11 +147,40 @@ pub fn days_until(due_date: &str) -> Option<i64> {
 }
 
 fn days_since_epoch() -> i64 {
-    std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i64
-        / 86_400
+        .as_secs() as i64;
+    (now + local_offset_seconds()).div_euclid(86_400)
+}
+
+fn local_offset_seconds() -> i64 {
+    use std::sync::OnceLock;
+    static OFFSET: OnceLock<i64> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        std::process::Command::new("date")
+            .arg("+%z")
+            .output()
+            .ok()
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .and_then(|s| parse_tz_offset(s.trim()))
+            .unwrap_or(0)
+    })
+}
+
+fn parse_tz_offset(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 5 {
+        return None;
+    }
+    let sign: i64 = match bytes[0] {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let hours: i64 = s.get(1..3)?.parse().ok()?;
+    let minutes: i64 = s.get(3..5)?.parse().ok()?;
+    Some(sign * (hours * 3600 + minutes * 60))
 }
 
 fn days_in_year(year: i32) -> u32 {

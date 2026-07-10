@@ -1,8 +1,15 @@
 mod storage;
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 pub use storage::Storage;
+
+fn dedup_preserve_order(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -311,8 +318,7 @@ impl TodoData {
                 changed = true;
             }
         }
-        self.categories.sort();
-        self.categories.dedup();
+        dedup_preserve_order(&mut self.categories);
         for category in &mut self.archived_categories {
             if category == old {
                 *category = new.clone();
@@ -322,8 +328,7 @@ impl TodoData {
                 changed = true;
             }
         }
-        self.archived_categories.sort();
-        self.archived_categories.dedup();
+        dedup_preserve_order(&mut self.archived_categories);
         changed
     }
 
@@ -352,13 +357,10 @@ impl TodoData {
         }
 
         let new_idx = new_idx as usize;
-        let order = self.items[new_idx].order;
-        self.items[idx].order = order;
-        self.items[new_idx].order = if direction > 0 {
-            order.wrapping_sub(1)
-        } else {
-            order.wrapping_add(1)
-        };
+        let a_order = self.items[idx].order;
+        let b_order = self.items[new_idx].order;
+        self.items[idx].order = b_order;
+        self.items[new_idx].order = a_order;
 
         self.items.sort_by_key(|i| i.order);
         true
@@ -400,11 +402,15 @@ impl TodoData {
     }
 
     pub fn load() -> Self {
-        Storage::load().unwrap_or_else(|_| {
-            let empty = TodoData::new();
-            let _ = Storage::save(&empty);
-            empty
-        })
+        match Storage::load() {
+            Ok(data) => data,
+            Err(reason) => {
+                Storage::backup_corrupt(&reason);
+                let empty = TodoData::new();
+                let _ = Storage::save(&empty);
+                empty
+            }
+        }
     }
 
     pub fn save(&self) {
@@ -428,8 +434,7 @@ fn move_category_branch(from: &mut Vec<String>, to: &mut Vec<String>, name: &str
     }
 
     to.extend(moved);
-    to.sort();
-    to.dedup();
+    dedup_preserve_order(to);
 }
 
 pub fn normalize_category(name: &str) -> Option<String> {

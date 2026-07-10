@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::TodoData;
 
-fn data_path() -> PathBuf {
+pub fn data_path() -> PathBuf {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
@@ -20,6 +20,35 @@ impl Storage {
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
         serde_json::from_str(&raw).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    }
+
+    pub fn backup_corrupt(reason: &str) -> Option<PathBuf> {
+        let path = data_path();
+        if !path.exists() {
+            return None;
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = path.with_extension(format!("json.corrupt-{ts}"));
+        match std::fs::rename(&path, &backup) {
+            Ok(()) => {
+                eprintln!(
+                    "todo-tui: could not load {} ({reason}); moved to {}",
+                    path.display(),
+                    backup.display()
+                );
+                Some(backup)
+            }
+            Err(e) => {
+                eprintln!(
+                    "todo-tui: could not load {} ({reason}); failed to back it up: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
     }
 
     pub fn save(data: &TodoData) -> Result<(), String> {

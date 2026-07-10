@@ -49,23 +49,23 @@ todo-tui
 | Key | Action |
 |---|---|
 | `Up`/`Down` | Navigate |
-| `Enter` | Edit selected item, or create one if the list is empty |
-| `Space` | Toggle done |
-| `d` | Toggle doing |
+| `Enter` | Toggle done |
+| `Space` | Toggle doing |
+| `Ctrl+E` | Edit selected item, or create one if the list is empty |
 | `Delete` | Confirm-delete selected item |
-| `p` / `P` | Cycle priority forward/backward |
-| `Alt+Up` / `Alt+Down` | Reorder item |
-| `u` | Undo last delete |
-| `*` | Toggle pin |
-| `s` | Sort picker |
+| `Ctrl+P` / `Ctrl+Shift+P` | Cycle priority forward/backward |
+| `Ctrl+Up` / `Ctrl+Down` | Reorder item |
+| `*` / `Ctrl+*` | Toggle pin |
 | `Left` / `Right` | Switch between items and category sidebar |
-| `PageUp` / `PageDown` | Switch category filter from either pane |
-| `Ctrl+PageUp` / `Ctrl+PageDown` | Switch only top-level category filters |
-| `Ctrl+K` | Assign category |
+| `PageUp` / `PageDown` | Switch category filter |
+| `Ctrl+O` | Assign category to selected item |
 | `Ctrl+D` | Open due-date calendar |
 | `/` | Command mode |
-| `Ctrl+/` | Show keybindings |
+| `Ctrl+K` | Show keybindings |
+| `Ctrl+H` | Show help |
 | `Ctrl+C` | Quit |
+
+Any other printable character in the items pane starts a new todo prefilled with that character. In the sidebar it starts a new category.
 
 Command mode supports `/search`, `/delete`, `/done`, `/clear`, `/reset`, `/themes`, `/sort`, `/help`, and `/keybindings`. v0.6 also adds unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. Type a command prefix to filter the popup, press `Tab` to autocomplete the highlighted command or subcommand, and press `Enter` to execute it. `/filter category` filters the visible list; `/filter clear` and `/reset` clear filters and restore the default view. `Ctrl+K` assigns/moves the selected item. `/move` assigns the selected item in the items pane, or moves the highlighted category branch in the sidebar. `/archive one` archives the current item in the items pane or the highlighted category branch in the sidebar; from `All`, `/archive one` archives all visible items and categories. `/archive bulk` bulk-selects items or categories based on the active pane, `/archive restore bulk` restores archived items or categories, and `/archive archived` toggles archived view. `/archived` and `/unarchive` remain hidden aliases. `/rename` edits the selected item in the items pane or the highlighted category in the sidebar; `/rename old new` remains available for direct category-path renames. In `/delete`, `Ctrl+A` opens a confirmation popup for all current delete targets. In the items pane it deletes visible items only and keeps category names; in the category pane it deletes all items and all category names.
 
