@@ -22,7 +22,7 @@ Reference the package in your home-manager (or system) config:
 
 ```nix
 home.packages = [
-  inputs.todo-tui.packages.${pkgs.system}.default
+  inputs.todo-tui.packages.${pkgs.stdenv.hostPlatform.system}.default
 ];
 ```
 
