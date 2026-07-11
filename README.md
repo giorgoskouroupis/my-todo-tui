@@ -2,6 +2,8 @@
 
 A keyboard-driven terminal todo app built with Ratatui and crossterm.
 
+![todo-tui — main view with items, categories, priorities, and due dates](media/main.png)
+
 ## Install With Nix / NixOS
 
 ### As a flake input in your NixOS or home-manager config (recommended)
