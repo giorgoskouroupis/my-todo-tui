@@ -1,4 +1,15 @@
-# v0.8.0 — Bulk-select, unified search, light themes
+# v0.8.1 — Resizable sidebar, Tab pane switch, popup wrapping
+
+## New
+- **`/sidebar` and `Ctrl+B` resize the sidebar.** Enters a resize mode: `←/→` nudges the separator by 1 column, `Shift+←/→` by 5, `r` resets to the default (22), `Enter` saves the new width to `config.json`, `Esc` cancels and restores the original width. Both borders on either side of the separator highlight while resizing.
+- **`Tab` switches between the Categories and Items panes**, mirroring `←/→` in Normal and multi-select modes.
+
+## Fixes
+- **Popups now fit on narrow terminals.** The Help popup auto-sizes to its widest line and wraps content that still overflows; the Keybindings popup drops from two columns to one when there isn't room; the Confirm-delete header wraps too. Tested down to ~40-col widths.
+
+---
+
+
 
 ## New
 - **Generic bulk-select mode (`/select`).** Toggle any mix of items and categories with `Space`, hit `Ctrl+A` to select all, then `Enter` opens an action popup with `Delete`, `Archive`, `Toggle done`, `Assign category` (and `Edit` when the selection is a single item). The delete action reuses the same confirmation popup as single delete, so single vs. bulk delete look and behave the same.

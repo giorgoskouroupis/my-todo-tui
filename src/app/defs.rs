@@ -108,6 +108,10 @@ pub enum Mode {
         selected: Date,
         prompt_focused: bool,
     },
+    ResizeSidebar {
+        return_pane: Pane,
+        original_width: u16,
+    },
 }
 
 impl Mode {
@@ -216,6 +220,11 @@ pub enum Action {
     SwitchCategoryFilter(i32, bool),
     Undo,
     Quit,
+    EnterResizeSidebar,
+    ResizeSidebar(i16),
+    ResetSidebarWidth,
+    ConfirmResizeSidebar,
+    CancelResizeSidebar,
 }
 
 pub(super) enum PopupBackTarget {

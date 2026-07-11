@@ -28,6 +28,7 @@ pub struct RenderState<'a> {
     pub category_entries: &'a [CategoryEntry],
     pub theme: &'a Theme,
     pub sort_mode: &'a SortMode,
+    pub sidebar_width: u16,
 }
 
 pub fn render(frame: &mut Frame, state: RenderState<'_>) {
@@ -49,7 +50,10 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
     render_header(frame, layout[0], &state, base_theme);
 
     let mid = layout[1];
-    let h_layout = Layout::horizontal([Constraint::Length(22), Constraint::Min(1)]).split(mid);
+    let sidebar_w = state
+        .sidebar_width
+        .min(mid.width.saturating_sub(10).max(6));
+    let h_layout = Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).split(mid);
 
     render_sidebar(
         frame,
@@ -490,14 +494,15 @@ fn render_sidebar(
         }
     }
 
+    let is_resizing = matches!(mode, Mode::ResizeSidebar { .. });
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(if is_active {
+        .border_style(Style::default().fg(if is_active || is_resizing {
             theme.accent
         } else {
             theme.border_default
-        }))
-        .title(" Categories ")
+        }).add_modifier(if is_resizing { Modifier::BOLD } else { Modifier::empty() }))
+        .title(if is_resizing { " Categories \u{2194} " } else { " Categories " })
         .title_style(
             Style::default()
                 .fg(theme.accent)
@@ -554,13 +559,14 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: &T
         None
     });
 
+    let is_resizing = matches!(state.mode, Mode::ResizeSidebar { .. });
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(if is_active {
+        .border_style(Style::default().fg(if is_active || is_resizing {
             theme.accent
         } else {
             theme.border_default
-        }))
+        }).add_modifier(if is_resizing { Modifier::BOLD } else { Modifier::empty() }))
         .title(" Items ")
         .title_style(
             Style::default()
@@ -1345,95 +1351,88 @@ fn help_file_paths() -> (String, String) {
 
 fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
     let (config_path, data_path) = help_file_paths();
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("  Welcome to ", Style::default().fg(theme.text_primary)),
-            Span::styled(
-                "todo-tui",
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /help           — this screen",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /keybindings    — show all keybindings",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /filter         — filter items (due, priority, category, archived)",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /delete         — bulk delete (multi-select)",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /done           — bulk toggle done",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /clear          — clear completed items",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /archive        — archive items/categories (done, all, restore)",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /move           — move item or highlighted category",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /rename         — rename current item/category",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  /themes         — pick a theme",
-            Style::default().fg(theme.text_primary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  Tab autocompletes commands/subcommands, Esc cancels",
-            Style::default().fg(theme.text_muted),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::raw("")).style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            "  Files:",
-            Style::default()
-                .fg(theme.text_muted)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            format!("  Config: {}", config_path),
-            Style::default().fg(theme.text_secondary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
-        Line::from(Span::styled(
-            format!("  Data:   {}", data_path),
-            Style::default().fg(theme.text_secondary),
-        ))
-        .style(Style::default().bg(theme.bg_secondary)),
+    let bg = theme.bg_secondary;
+    let primary = Style::default().fg(theme.text_primary);
+    let secondary = Style::default().fg(theme.text_secondary);
+    let muted = Style::default().fg(theme.text_muted);
+    let muted_bold = muted.add_modifier(Modifier::BOLD);
+
+    enum Entry<'a> {
+        Blank,
+        Welcome,
+        Text(String, Style, &'a str),
+    }
+
+    let entries: Vec<Entry> = vec![
+        Entry::Welcome,
+        Entry::Blank,
+        Entry::Text("/help           — this screen".into(), primary, "  "),
+        Entry::Text("/keybindings    — show all keybindings".into(), primary, "  "),
+        Entry::Text("/filter         — filter items (due, priority, category, archived)".into(), primary, "  "),
+        Entry::Text("/delete         — bulk delete (multi-select)".into(), primary, "  "),
+        Entry::Text("/done           — bulk toggle done".into(), primary, "  "),
+        Entry::Text("/clear          — clear completed items".into(), primary, "  "),
+        Entry::Text("/archive        — archive items/categories (done, all, restore)".into(), primary, "  "),
+        Entry::Text("/move           — move item or highlighted category".into(), primary, "  "),
+        Entry::Text("/rename         — rename current item/category".into(), primary, "  "),
+        Entry::Text("/sidebar        — resize sidebar (Left/Right, Enter save)".into(), primary, "  "),
+        Entry::Text("/themes         — pick a theme".into(), primary, "  "),
+        Entry::Blank,
+        Entry::Text("Tab autocompletes commands/subcommands, Esc cancels".into(), muted, "  "),
+        Entry::Blank,
+        Entry::Text("Files:".into(), muted_bold, "  "),
+        Entry::Text(format!("Config: {}", config_path), secondary, "  "),
+        Entry::Text(format!("Data:   {}", data_path), secondary, "  "),
     ];
 
-    let width = 64.min(area.width.saturating_sub(2));
+    let raw_widths: Vec<usize> = entries
+        .iter()
+        .map(|e| match e {
+            Entry::Blank => 0,
+            Entry::Welcome => "  Welcome to todo-tui".chars().count(),
+            Entry::Text(text, _, indent) => indent.chars().count() + text.chars().count(),
+        })
+        .collect();
+    let longest = raw_widths.iter().copied().max().unwrap_or(0);
+
+    let available = area.width.saturating_sub(4) as usize;
+    let inner_width = longest.min(available).max(20);
+    let width = (inner_width as u16 + 2).min(area.width.saturating_sub(2));
+
+    let mut lines: Vec<Line> = Vec::new();
+    for entry in &entries {
+        match entry {
+            Entry::Blank => {
+                lines.push(Line::from(Span::raw("")).style(Style::default().bg(bg)));
+            }
+            Entry::Welcome => {
+                lines.push(
+                    Line::from(vec![
+                        Span::styled("  Welcome to ", primary),
+                        Span::styled("todo-tui", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    ])
+                    .style(Style::default().bg(bg)),
+                );
+            }
+            Entry::Text(text, style, indent) => {
+                let indent_w = indent.chars().count();
+                let body_width = inner_width.saturating_sub(indent_w).max(1);
+                let wrapped = wrap_text(text, body_width);
+                let cont_indent: String = " ".repeat(indent_w + 2);
+                for (i, seg) in wrapped.iter().enumerate() {
+                    let full = if i == 0 {
+                        format!("{indent}{seg}")
+                    } else {
+                        format!("{cont_indent}{seg}")
+                    };
+                    lines.push(
+                        Line::from(Span::styled(full, *style)).style(Style::default().bg(bg)),
+                    );
+                }
+            }
+        }
+    }
+
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
     let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
@@ -1460,10 +1459,11 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let key_lines: [(&str, &str, bool); 43] = [
+    let key_lines: [(&str, &str, bool); 52] = [
         ("Global", "", true),
         ("Ctrl+C", "Quit", false),
         ("Ctrl+H", "Help", false),
+        ("Ctrl+B", "Resize sidebar", false),
         ("/", "Command mode", false),
         ("", "", false),
         ("Items", "", true),
@@ -1477,6 +1477,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Ctrl+D", "Due date", false),
         ("*", "Pin", false),
         ("←/→", "Switch pane", false),
+        ("Tab", "Switch pane", false),
         ("PgUp/PgDn", "Cycle filter", false),
         ("printable", "New item", false),
         ("", "", false),
@@ -1500,32 +1501,56 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("PgUp/PgDn", "Cycle filter", false),
         ("printable", "Create cat", false),
         ("", "", false),
+        ("Resize sidebar", "", true),
+        ("←/→", "\u{00b1}1 column", false),
+        ("Shift+←/→", "\u{00b1}5 columns", false),
+        ("r", "Reset to default", false),
+        ("Enter", "Save & exit", false),
+        ("Esc", "Cancel (restore)", false),
+        ("", "", false),
         ("Calendar", "", true),
         ("Tab", "Focus toggle", false),
         ("Ctrl+T", "Today", false),
         ("Delete", "Clear date", false),
     ];
 
-    let cell_w = 38usize;
     let key_w = 14usize;
-    let desc_w = cell_w.saturating_sub(key_w + 4);
-    let split = key_lines.len().div_ceil(2);
-    let left = &key_lines[..split];
-    let right = &key_lines[split..];
-    let mut lines = Vec::new();
     let bg = theme.bg_secondary;
+    let cell_w = 38usize;
+    let desc_w = cell_w.saturating_sub(key_w + 4);
+    let two_col_width = cell_w * 2 + 4;
+    let available_inner = area.width.saturating_sub(2) as usize;
+    let two_col = available_inner >= two_col_width;
 
-    for i in 0..left.len() {
-        let mut spans = Vec::new();
-        push_cell(&mut spans, left[i], cell_w, key_w, desc_w, theme);
-        if let Some(entry) = right.get(i) {
-            spans.push(Span::raw(" "));
-            push_cell(&mut spans, *entry, cell_w, key_w, desc_w, theme);
+    let mut lines = Vec::new();
+    if two_col {
+        let split = key_lines.len().div_ceil(2);
+        let left = &key_lines[..split];
+        let right = &key_lines[split..];
+        for i in 0..left.len() {
+            let mut spans = Vec::new();
+            push_cell(&mut spans, left[i], cell_w, key_w, desc_w, theme);
+            if let Some(entry) = right.get(i) {
+                spans.push(Span::raw(" "));
+                push_cell(&mut spans, *entry, cell_w, key_w, desc_w, theme);
+            }
+            lines.push(Line::from(spans).style(Style::default().bg(bg)));
         }
-        lines.push(Line::from(spans).style(Style::default().bg(bg)));
+    } else {
+        let cell_w_single = available_inner.max(key_w + 8);
+        let desc_w_single = cell_w_single.saturating_sub(key_w + 4);
+        for entry in key_lines.iter() {
+            let mut spans = Vec::new();
+            push_cell(&mut spans, *entry, cell_w_single, key_w, desc_w_single, theme);
+            lines.push(Line::from(spans).style(Style::default().bg(bg)));
+        }
     }
 
-    let width = (cell_w * 2 + 4).min(area.width.saturating_sub(2) as usize) as u16;
+    let width = if two_col {
+        two_col_width.min(available_inner) as u16
+    } else {
+        available_inner as u16
+    };
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
     let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
@@ -1584,7 +1609,9 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
 
     let mut lines_text: Vec<String> = Vec::new();
     if texts.len() == 1 {
-        lines_text.push("Are you sure you want to delete?".into());
+        for wrapped in wrap_text("Are you sure you want to delete?", max_content_w) {
+            lines_text.push(wrapped);
+        }
         for wrapped in wrap_text(
             &format!("\"{}\"", &texts[0]),
             max_content_w.saturating_sub(2),
@@ -1592,10 +1619,12 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
             lines_text.push(format!("  {wrapped}"));
         }
     } else {
-        lines_text.push(format!(
-            "Are you sure you want to delete these {} items?",
-            texts.len()
-        ));
+        for wrapped in wrap_text(
+            &format!("Are you sure you want to delete these {} items?", texts.len()),
+            max_content_w,
+        ) {
+            lines_text.push(wrapped);
+        }
         let preview_count = texts.len().min(8);
         for t in texts.iter().take(preview_count) {
             for wrapped in wrap_text(&format!("\"{t}\""), max_content_w.saturating_sub(2)) {
@@ -1617,14 +1646,15 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
             .style(Style::default().bg(theme.bg_secondary)),
         );
     }
-    let content_width = lines_text
+    let raw_max = lines_text
         .iter()
-        .map(|l| l.len() as u16)
+        .map(|l| l.chars().count() as u16)
         .max()
-        .unwrap_or(0)
-        .max(30)
-        + 4;
-    let width = content_width.min(area.width.saturating_sub(4)).max(30);
+        .unwrap_or(0);
+    let desired = raw_max.max(30) + 4;
+    let width = desired
+        .min(area.width.saturating_sub(2))
+        .max(area.width.min(20));
     let height = lines.len() as u16 + 2;
     let popup_x = area.x + (area.width.saturating_sub(width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(height)) / 2;
@@ -2111,6 +2141,13 @@ fn render_input(
         Mode::Editing { .. } => {
             let line =
                 render_prompt_input_line("  ", input.text(), input.cursor(), input_width, theme);
+            (line, None)
+        }
+        Mode::ResizeSidebar { .. } => {
+            let line = Line::from(vec![Span::styled(
+                "  [Sidebar: \u{2190}/\u{2192} \u{00b11}, Shift+\u{2190}/\u{2192} \u{00b15}, r reset, Enter save, Esc cancel]",
+                Style::default().fg(theme.warning),
+            )]);
             (line, None)
         }
         _ if input.is_empty() && matches!(mode, Mode::Normal) => {

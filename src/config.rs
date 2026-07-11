@@ -7,6 +7,8 @@ use crate::ui::theme::Theme;
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
     pub theme: Option<ThemeConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_width: Option<u16>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -175,12 +177,33 @@ pub fn save_theme_name(name: &str) {
     let tc = cfg.theme.get_or_insert_with(ThemeConfig::default);
     tc.name = Some(name.to_string());
 
+    write_config(&path, &cfg);
+}
+
+pub fn load_sidebar_width() -> Option<u16> {
+    let path = config_path();
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let cfg: Config = serde_json::from_str(&raw).ok()?;
+    cfg.sidebar_width
+}
+
+pub fn save_sidebar_width(width: u16) {
+    let path = config_path();
+    let mut cfg = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Config>(&raw).ok())
+        .unwrap_or_default();
+    cfg.sidebar_width = Some(width);
+    write_config(&path, &cfg);
+}
+
+fn write_config(path: &std::path::Path, cfg: &Config) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(raw) = serde_json::to_string_pretty(&cfg) {
+    if let Ok(raw) = serde_json::to_string_pretty(cfg) {
         let tmp = path.with_extension("json.tmp");
         let _ = std::fs::write(&tmp, &raw);
-        let _ = std::fs::rename(&tmp, &path);
+        let _ = std::fs::rename(&tmp, path);
     }
 }

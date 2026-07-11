@@ -46,11 +46,16 @@ pub struct App {
     pub dirty: bool,
     pub last_mutated: Instant,
     pub pending_due_date: Option<String>,
+    pub sidebar_width: u16,
     category_selection_memory: HashMap<String, usize>,
     popup_back_stack: Vec<PopupBackTarget>,
     undo_stack: Vec<UndoEntry>,
     saved_search: Option<String>,
 }
+
+pub const SIDEBAR_WIDTH_DEFAULT: u16 = 22;
+pub const SIDEBAR_WIDTH_MIN: u16 = 12;
+pub const SIDEBAR_WIDTH_MAX: u16 = 60;
 
 enum UndoEntry {
     Delete(Vec<TodoItem>),
@@ -67,6 +72,9 @@ impl App {
     pub fn new() -> Self {
         let theme = config::load_theme();
         let data = TodoData::load();
+        let sidebar_width = config::load_sidebar_width()
+            .unwrap_or(SIDEBAR_WIDTH_DEFAULT)
+            .clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
         Self {
             data,
             selected_index: 0,
@@ -86,6 +94,7 @@ impl App {
             dirty: false,
             last_mutated: Instant::now(),
             pending_due_date: None,
+            sidebar_width,
             category_selection_memory: HashMap::new(),
             popup_back_stack: Vec::new(),
             undo_stack: Vec::new(),
@@ -719,6 +728,7 @@ impl App {
                         category_entries: &category_entries,
                         theme: &app.theme,
                         sort_mode: &app.sort_mode,
+                        sidebar_width: app.sidebar_width,
                     },
                 )
             })?;
@@ -808,6 +818,31 @@ impl App {
         {
             return Some(Action::Undo);
         }
+        if key.code == KeyCode::Char('b')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(&self.mode, Mode::Normal)
+        {
+            return Some(Action::EnterResizeSidebar);
+        }
+        if let Mode::ResizeSidebar { .. } = &self.mode {
+            return match key.code {
+                KeyCode::Left => {
+                    let step = if key.modifiers.contains(KeyModifiers::SHIFT) { -5 } else { -1 };
+                    Some(Action::ResizeSidebar(step))
+                }
+                KeyCode::Right => {
+                    let step = if key.modifiers.contains(KeyModifiers::SHIFT) { 5 } else { 1 };
+                    Some(Action::ResizeSidebar(step))
+                }
+                KeyCode::Char('r') if key.modifiers.is_empty() => Some(Action::ResetSidebarWidth),
+                KeyCode::Enter => Some(Action::ConfirmResizeSidebar),
+                KeyCode::Esc => Some(Action::CancelResizeSidebar),
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    Some(Action::ConfirmResizeSidebar)
+                }
+                _ => None,
+            };
+        }
 
         if matches!(self.mode, Mode::Searching) && key.code == KeyCode::Tab {
             self.filter = self.input.text().to_string();
@@ -857,6 +892,7 @@ impl App {
             match key.code {
                 KeyCode::Left if self.pane == Pane::Items => return Some(Action::SwitchPane),
                 KeyCode::Right if self.pane == Pane::Categories => return Some(Action::SwitchPane),
+                KeyCode::Tab if key.modifiers.is_empty() => return Some(Action::SwitchPane),
                 KeyCode::PageUp => {
                     return Some(Action::SwitchCategoryFilter(-1, true));
                 }
@@ -1094,6 +1130,7 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
                 _ => None,
             },
+            Mode::ResizeSidebar { .. } => None,
         }
     }
 
@@ -1653,6 +1690,15 @@ impl App {
                     }
                     "keybindings" | "k" => {
                         self.mode = Mode::Keybindings;
+                    }
+                    "sidebar" => {
+                        let return_pane = self.pane;
+                        let original_width = self.sidebar_width;
+                        self.pane = Pane::Categories;
+                        self.mode = Mode::ResizeSidebar {
+                            return_pane,
+                            original_width,
+                        };
                     }
                     "categories" | "cat" => {
                         self.push_command_popup_back_target(&cmd);
@@ -2573,6 +2619,44 @@ impl App {
             }
             Action::CancelBulkActionPicker => {
                 self.return_after_secondary_mode();
+            }
+            Action::EnterResizeSidebar => {
+                let return_pane = self.pane;
+                let original_width = self.sidebar_width;
+                self.pane = Pane::Categories;
+                self.mode = Mode::ResizeSidebar {
+                    return_pane,
+                    original_width,
+                };
+            }
+            Action::ResizeSidebar(delta) => {
+                let current = self.sidebar_width as i32;
+                let next = (current + delta as i32)
+                    .clamp(SIDEBAR_WIDTH_MIN as i32, SIDEBAR_WIDTH_MAX as i32)
+                    as u16;
+                self.sidebar_width = next;
+            }
+            Action::ResetSidebarWidth => {
+                self.sidebar_width = SIDEBAR_WIDTH_DEFAULT;
+            }
+            Action::ConfirmResizeSidebar => {
+                if let Mode::ResizeSidebar { return_pane, original_width } = &self.mode {
+                    self.pane = *return_pane;
+                    let changed = *original_width != self.sidebar_width;
+                    self.mode = Mode::Normal;
+                    if changed {
+                        config::save_sidebar_width(self.sidebar_width);
+                    }
+                } else {
+                    self.mode = Mode::Normal;
+                }
+            }
+            Action::CancelResizeSidebar => {
+                if let Mode::ResizeSidebar { return_pane, original_width } = &self.mode {
+                    self.pane = *return_pane;
+                    self.sidebar_width = *original_width;
+                }
+                self.mode = Mode::Normal;
             }
             Action::Quit => return true,
         }

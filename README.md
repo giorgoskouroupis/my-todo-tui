@@ -14,7 +14,7 @@ Add to your `flake.nix` inputs:
 inputs = {
   # ... your other inputs
   todo-tui = {
-    url = "github:giorgoskouroupis/my-todo-tui/v0.8.0";
+    url = "github:giorgoskouroupis/my-todo-tui/v0.8.1";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 };
@@ -48,13 +48,52 @@ nix develop --command cargo build --release
 
 ## Install On Debian/Ubuntu
 
+Make sure Rust is installed. On Debian 13+ / Ubuntu 24.04+ you can install `rustup` straight from apt (recommended, keeps you on a current toolchain):
+
 ```sh
-sudo apt install -y cargo rustc
-cargo install --path . --root ~/.local
-~/.local/bin/todo-tui
+sudo apt install -y rustup git
+rustup default stable
 ```
 
-To build a `.deb`:
+On older releases either grab `rustup` from [rustup.rs](https://rustup.rs), or use the apt-provided compiler:
+
+```sh
+sudo apt install -y cargo rustc git
+```
+
+Then clone and build:
+
+```sh
+git clone https://github.com/giorgoskouroupis/my-todo-tui
+cd my-todo-tui
+cargo build --release
+```
+
+Copy the binary somewhere on your `PATH`:
+
+```sh
+mkdir -p ~/.local/bin
+cp target/release/todo-tui ~/.local/bin/
+```
+
+If `~/.local/bin` isn't on your `PATH`, add this line to your `~/.bashrc` (or `~/.zshrc`) and reopen your terminal:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Now run `todo-tui`.
+
+To update later:
+
+```sh
+cd my-todo-tui
+git pull
+cargo build --release
+cp target/release/todo-tui ~/.local/bin/
+```
+
+### Build a `.deb` (optional)
 
 ```sh
 sudo apt install -y dpkg-dev
@@ -75,10 +114,11 @@ cargo deb
 | `Ctrl+P` / `Ctrl+Shift+P` | Cycle priority forward/backward |
 | `Ctrl+Up` / `Ctrl+Down` | Reorder item |
 | `*` / `Ctrl+*` | Toggle pin |
-| `Left` / `Right` | Switch between items and category sidebar |
+| `Left` / `Right` / `Tab` | Switch between items and category sidebar |
 | `PageUp` / `PageDown` | Switch category filter |
 | `Ctrl+O` | Assign category to selected item |
 | `Ctrl+D` | Open due-date calendar |
+| `Ctrl+B` | Resize sidebar (`←/→` ±1, `Shift+←/→` ±5, `r` reset, `Enter` save, `Esc` cancel) |
 | `/` | Command mode |
 | `Ctrl+Z` | Undo last delete or archive (up to 20 levels) |
 | `Ctrl+K` | Show keybindings |
@@ -87,7 +127,7 @@ cargo deb
 
 Any other printable character in the items pane starts a new todo prefilled with that character. In the sidebar it starts a new category.
 
-Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/reset`, `/themes`, `/sort`, `/help`, and `/keybindings`, plus unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. `/select` toggles into a generic bulk-select mode: `Space` toggles items/categories, `Ctrl+A` selects all, and `Enter` opens an action popup (`Delete`, `Archive`, `Toggle done`, `Assign category`, plus `Edit` when the selection is a single item) applied to the whole selection.
+Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/reset`, `/themes`, `/sort`, `/sidebar`, `/help`, and `/keybindings`, plus unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. `/select` toggles into a generic bulk-select mode: `Space` toggles items/categories, `Ctrl+A` selects all, and `Enter` opens an action popup (`Delete`, `Archive`, `Toggle done`, `Assign category`, plus `Edit` when the selection is a single item) applied to the whole selection.
 
 `/search` types-to-filter live. `↑`/`↓` navigate the filtered list. Item shortcuts work on the highlighted result while typing: `Ctrl+P` / `Ctrl+Shift+P` cycle priority, `Ctrl+↑/↓` reorder, `Ctrl+*` toggle pin, `Ctrl+D` opens the due-date calendar, `Ctrl+E` edits the item, `Ctrl+O` assigns a category. `Enter` opens the same action popup as `/select` but on the single highlighted item (or press `Tab` first to promote into bulk-select mode on the currently filtered list, where `Space` toggles multiple items). All these round-trip back to the search prompt when the target flow finishes, so the query you were building is never lost. `Esc` clears the filter.
 
