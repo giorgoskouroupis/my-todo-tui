@@ -12,7 +12,7 @@ Add to your `flake.nix` inputs:
 inputs = {
   # ... your other inputs
   todo-tui = {
-    url = "github:giorgoskouroupis/my-todo-tui";
+    url = "github:giorgoskouroupis/my-todo-tui/v0.8.0";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 };
