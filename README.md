@@ -2,46 +2,63 @@
 
 A keyboard-driven terminal todo app built with Ratatui and crossterm.
 
-## Build On Debian/Ubuntu
+## Install With Nix / NixOS
+
+### As a flake input in your NixOS or home-manager config (recommended)
+
+Add to your `flake.nix` inputs:
+
+```nix
+inputs = {
+  # ... your other inputs
+  todo-tui = {
+    url = "github:giorgoskouroupis/my-todo-tui";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+};
+```
+
+Reference the package in your home-manager (or system) config:
+
+```nix
+home.packages = [
+  inputs.todo-tui.packages.${pkgs.system}.default
+];
+```
+
+Then `sudo nixos-rebuild switch --flake .` (or `home-manager switch --flake .`). `todo-tui` will be on your `PATH`.
+
+### One-shot / quick try
 
 ```sh
-sudo apt update
-sudo apt install -y cargo rustc
+nix run github:giorgoskouroupis/my-todo-tui                # try it without installing
+nix profile install github:giorgoskouroupis/my-todo-tui    # install to user profile
+```
 
-cargo test
-cargo build --release
+### From a local clone (for hacking on the code)
+
+```sh
+git clone https://github.com/giorgoskouroupis/my-todo-tui
+cd my-todo-tui
+nix develop --command cargo build --release
 ./target/release/todo-tui
 ```
 
-To install into your user-local prefix:
+## Install On Debian/Ubuntu
 
 ```sh
+sudo apt install -y cargo rustc
 cargo install --path . --root ~/.local
 ~/.local/bin/todo-tui
 ```
 
-To build a Debian package:
+To build a `.deb`:
 
 ```sh
 sudo apt install -y dpkg-dev
 cargo install cargo-deb
 cargo deb
 # sudo apt install ./target/debian/todo-tui_*.deb
-```
-
-## Build With Nix/NixOS
-
-```sh
-nix develop --command cargo test
-nix develop --command cargo build --release
-nix develop --command cargo run
-```
-
-To install with Cargo from inside the dev shell:
-
-```sh
-nix develop --command cargo install --path . --root ~/.local
-todo-tui
 ```
 
 ## Core Controls
