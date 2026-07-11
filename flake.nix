@@ -10,7 +10,7 @@
 
       todo-tui = pkgs.rustPlatform.buildRustPackage {
         pname = "todo-tui";
-        version = "0.7.4";
+        version = "0.8.0";
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         meta.mainProgram = "todo-tui";

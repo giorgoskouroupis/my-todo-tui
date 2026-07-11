@@ -1,4 +1,43 @@
+# v0.8.0 — Bulk-select, unified search, light themes
+
+## New
+- **Generic bulk-select mode (`/select`).** Toggle any mix of items and categories with `Space`, hit `Ctrl+A` to select all, then `Enter` opens an action popup with `Delete`, `Archive`, `Toggle done`, `Move to category`. The delete action reuses the same confirmation popup as single delete, so single vs. bulk delete look and behave the same.
+  - `Move to category` opens the category picker with the whole selection as target; picking a category (or `None`) reassigns every selected item at once. Existing single-`/move` behaviour is unchanged.
+- **`/select` alongside the shortcut commands.** `/delete`, `/done`, `/archive bulk` still work as one-shot shortcuts; `/select` is the discoverable "pick first, then act" entry point.
+
+## Fixes
+- **`Ctrl+Z` now reverses every archive path**, not just the delete-popup Archive and `/archive bulk` multi-select. Single `/archive one`, `/archive done`, `/archive all`, `/archive restore …`, and the `Archive` menu picker all push undo entries now, so `Ctrl+Z` restores the most recent action regardless of whether it was a delete or an archive.
+- **`/` in text input no longer hijacks the command palette.** Typing `/` mid-word during Editing/Rename/Search/CategoryAdd/CategoryPicker/DueDateCalendar prompts inserts a literal `/` instead of swallowing the buffer and switching to command mode. `/` still opens the command palette from Normal mode.
+- **Category badge no longer clips long items.** The `[cat|sub]` badge moved from the end of the wrapped text line to the item's status/marker row and is now **right-aligned** — badges land in a predictable column instead of shifting with the number of pin/due-date icons. When the row is too narrow to fit a right-anchored badge, it falls back to trailing after the due date so nothing ever gets pushed off-screen.
+- **Uniform delete confirmation.** Every delete path now flows through the same `ConfirmDelete` popup — single `Delete`, `/delete` + `Enter`, `/delete` + `Ctrl+A`, sidebar category delete, and `/select` → Delete action. Previously `/delete` + `Enter` deleted without confirmation. The popup handler now also cascades deletion of a category to every item inside it (previously items got orphaned with a category label pointing at a removed category), and `Ctrl+Z` restores both categories and their items in one step.
+
+## UI
+- **Wrapped item text is justified.** Multi-line item text now expands the inter-word gaps so each wrapped segment fills the full text column (Word-style justify). The final wrap line stays left-aligned so short trailing text doesn't spread across the screen; single-line items are unaffected.
+- **`Up` / `Down` in item text prompts jump to line start / end** (mirrors `Home` / `End`). Applies to the new-item, edit-item, and rename prompts.
+- **`/search` now shares the standard text-prompt behavior** — Ctrl+←/→ word jump, Home/End, Ctrl+Backspace/Delete word delete, all the usual editing keys just work. The search prompt routes through the same `InputBuffer` + `handle_text_input_key` helper as every other text mode, so typing in Search feels identical to typing an item.
+- **`Up` / `Down` in `/search` navigate the filtered list** while you keep typing (fzf-style).
+- **`Enter` in `/search` opens the bulk-action popup on the highlighted result** (single-item). Pick `Delete`, `Archive`, `Toggle done`, or `Move to category` without leaving the search flow. `Esc` still clears the filter and returns to Normal.
+- **Item shortcuts work while searching.** `Ctrl+P` / `Ctrl+Shift+P` cycle priority, `Ctrl+↑/↓` reorder, `Ctrl+*` toggle pin, and `Ctrl+D` opens the due-date calendar — all on the currently highlighted result. `Ctrl+E` (edit item) and `Ctrl+O` (assign category) also work: the search query is stashed on the way in and restored automatically on submit/cancel, so you land back in Search where you left off.
+- **`Tab` in `/search` promotes to bulk-select.** Instead of overloading `Ctrl+Space` on top of the typing prompt, `Tab` commits the filter and enters `/select`'s multi-select mode on the currently-filtered list. `Space` naturally becomes toggle (no typing to conflict with), `Ctrl+A` selects all filtered results, `Enter` opens the action popup. Cleanly reuses the existing `/select` semantics — no new hot-fix bindings.
+- **Bulk-action popup surfaces `Edit` and renames `Move to category` → `Assign category`.** The Assign action now mirrors `Ctrl+O`'s label; `Edit` appears when the selection is exactly one item (mirrors `Ctrl+E`) and opens the edit prompt on that item.
+- **Symmetric item pane margins.** The text column left 4 cols of dead space on the right and only 2 on the left; now it's 2/2, and the right-aligned category badge sits 2 cols from the pane's right edge.
+- Multi-select hint bar now shows `Bulk select: … | Space toggle …, Ctrl+A all, Enter choose action, Esc cancel` when in the new `/select` mode.
+- **Light themes.** Added `one-light`, `catppuccin-latte`, `solarized-light`, and `gruvbox-light`. The `/themes` picker now groups entries under `Light` / `Dark` headers so both categories are visible at a glance.
+
+---
+
 # v0.7.4 — Correctness fixes and Nix packaging
+
+## New
+- **Common-sense undo (`Ctrl+Z`).** The delete-undo removed in v0.7.1 is back, and it now also reverses archive/unarchive actions. Every one of these state changes pushes a snapshot onto a 20-entry undo stack:
+  - Confirmed delete (single item, bulk multi-select via `/delete`, `Ctrl+A` all).
+  - Archive from the delete popup (`A` key).
+  - Bulk archive / bulk restore via `/archive` multi-select.
+
+  `Ctrl+Z` from Normal mode pops the top of the stack. Delete restore reinserts items with their original IDs, category, and order; archive undo flips the archived flag back to its previous state for items and categories.
+
+## UI
+- Multi-select hint bar now says `Space toggle items` (was `select items`), so the toggle key is discoverable without opening the keybindings popup.
 
 ## Correctness
 - **Data-loss fix.** On startup, if `todos.json` fails to parse (partial write, corruption, incompatible field), the file is renamed to `todos.json.corrupt-<unix-ts>` instead of silently overwritten with an empty store.

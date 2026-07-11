@@ -29,6 +29,7 @@ pub enum MultiSelectCmd {
     ToggleDone,
     Archive,
     RestoreArchive,
+    PickAction,
 }
 
 pub enum Mode {
@@ -85,6 +86,11 @@ pub enum Mode {
     ArchivePicker {
         selected: usize,
     },
+    BulkActionPicker {
+        ids: Vec<u64>,
+        category_names: Vec<String>,
+        selected: usize,
+    },
     RenameInput {
         target: RenameTarget,
     },
@@ -116,6 +122,7 @@ impl Mode {
             | Self::CategoryParentPicker { selected, .. }
             | Self::SortPicker { selected, .. }
             | Self::ArchivePicker { selected }
+            | Self::BulkActionPicker { selected, .. }
             | Self::FilterPicker { selected }
             | Self::DueDateFilterPicker { selected } => Some(selected),
             _ => None,
@@ -133,6 +140,7 @@ pub enum RenameTarget {
 pub enum CategoryPickerTarget {
     AssignItem,
     MoveCategory(String),
+    AssignBulk(Vec<u64>),
 }
 
 pub enum Action {
@@ -190,6 +198,8 @@ pub enum Action {
     SubmitRename,
     CancelArchivePicker,
     ArchiveSelect(usize),
+    BulkActionSelect(usize),
+    CancelBulkActionPicker,
     CancelFilterPicker,
     FilterSelect(usize),
     CancelDueDateFilterPicker,
@@ -204,6 +214,7 @@ pub enum Action {
     CalendarTextChanged,
     CalendarToggleFocus,
     SwitchCategoryFilter(i32, bool),
+    Undo,
     Quit,
 }
 

@@ -32,7 +32,142 @@ fn test_app(data: TodoData) -> App {
         pending_due_date: None,
         category_selection_memory: HashMap::new(),
         popup_back_stack: Vec::new(),
+        undo_stack: Vec::new(),
+        saved_search: None,
     }
+}
+
+#[test]
+fn ctrl_z_restores_last_deleted_item() {
+    let mut data = TodoData::new();
+    let keep = data.add("keep me");
+    let victim = data.add("delete me");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::DeleteItem(victim));
+    app.handle_action(Action::ConfirmDeleteYes);
+    assert_eq!(app.data.items().len(), 1);
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::Undo)));
+    app.handle_action(action.unwrap());
+
+    assert_eq!(app.data.items().len(), 2);
+    assert!(app.data.items().iter().any(|i| i.id == victim && i.text == "delete me"));
+    assert!(app.data.items().iter().any(|i| i.id == keep));
+}
+
+#[test]
+fn ctrl_z_no_op_when_undo_stack_empty() {
+    let mut app = test_app(TodoData::new());
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert!(action.is_none());
+}
+
+#[test]
+fn ctrl_z_restores_bulk_multiselect_delete() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let c = data.add("c");
+    let mut app = test_app(data);
+
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::Delete,
+        selected: [a, b, c].into_iter().collect(),
+        selected_categories: Default::default(),
+    };
+    app.handle_action(Action::ConfirmMultiSelect);
+    assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+    assert_eq!(app.data.items().len(), 3);
+
+    app.handle_action(Action::ConfirmDeleteYes);
+    assert!(app.data.items().is_empty());
+
+    app.handle_action(Action::Undo);
+    assert_eq!(app.data.items().len(), 3);
+    for id in [a, b, c] {
+        assert!(app.data.items().iter().any(|i| i.id == id));
+    }
+}
+
+#[test]
+fn bulk_delete_via_enter_routes_through_confirm_popup() {
+    let mut data = TodoData::new();
+    let a = data.add("keep");
+    let b = data.add("victim");
+    let mut app = test_app(data);
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::Delete,
+        selected: [b].into_iter().collect(),
+        selected_categories: Default::default(),
+    };
+
+    app.handle_action(Action::ConfirmMultiSelect);
+    assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+    assert!(app.data.get(a).is_some());
+    assert!(app.data.get(b).is_some());
+
+    app.handle_action(Action::ConfirmDeleteNo);
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(app.data.get(b).is_some());
+}
+
+#[test]
+fn confirm_delete_yes_cascades_categories_to_items() {
+    let mut data = TodoData::new();
+    let child = data.add("child item");
+    data.set_category(child, Some("Work".to_string()));
+    data.add_category("Work");
+    let mut app = test_app(data);
+
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::Delete,
+        selected: Default::default(),
+        selected_categories: ["Work".to_string()].into_iter().collect(),
+    };
+    app.handle_action(Action::ConfirmMultiSelect);
+    assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+
+    app.handle_action(Action::ConfirmDeleteYes);
+    assert!(app.data.get(child).is_none());
+    assert!(!app.data.categories().contains(&"Work".to_string()));
+
+    app.handle_action(Action::Undo);
+    assert!(app.data.get(child).is_some());
+}
+
+#[test]
+fn ctrl_z_reverses_bulk_archive() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::Archive,
+        selected: [a, b].into_iter().collect(),
+        selected_categories: Default::default(),
+    };
+    app.handle_action(Action::ConfirmMultiSelect);
+    assert!(app.data.items().iter().all(|i| i.archived));
+
+    app.handle_action(Action::Undo);
+    assert!(app.data.items().iter().all(|i| !i.archived));
+}
+
+#[test]
+fn ctrl_z_reverses_confirm_delete_archive() {
+    let mut data = TodoData::new();
+    let id = data.add("victim");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::DeleteItem(id));
+    app.handle_action(Action::ConfirmDeleteArchive);
+    assert!(app.data.get(id).unwrap().archived);
+
+    app.handle_action(Action::Undo);
+    assert!(!app.data.get(id).unwrap().archived);
 }
 
 #[test]
@@ -1130,4 +1265,551 @@ fn ctrl_h_deletes_word_back_in_editing_mode() {
     let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
     assert!(action.is_none());
     assert_eq!(app.input.text(), "hello ");
+}
+
+#[test]
+fn up_down_arrows_in_search_mode_move_selection_through_filtered_results() {
+    let mut data = TodoData::new();
+    let _ = data.add("first");
+    let _ = data.add("second");
+    let _ = data.add("third");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.filter = String::new();
+    app.selected_index = 0;
+
+    let down = app.dispatch_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert!(matches!(down, Some(Action::SelectNext)));
+    app.handle_action(down.unwrap());
+    assert_eq!(app.selected_index, 1);
+
+    let up = app.dispatch_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert!(matches!(up, Some(Action::SelectPrev)));
+    app.handle_action(up.unwrap());
+    assert_eq!(app.selected_index, 0);
+    assert!(matches!(app.mode, Mode::Searching));
+}
+
+#[test]
+fn typing_in_search_mode_updates_filter_via_input_buffer() {
+    let mut app = test_app(TodoData::new());
+    app.handle_action(Action::ExecuteCommand("search".to_string()));
+    assert!(matches!(app.mode, Mode::Searching));
+    assert!(app.input.text().is_empty());
+
+    app.dispatch_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+    app.dispatch_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    app.dispatch_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+    assert_eq!(app.input.text(), "foo");
+    assert_eq!(app.filter, "foo");
+}
+
+#[test]
+fn ctrl_backspace_in_search_mode_deletes_previous_word() {
+    let mut app = test_app(TodoData::new());
+    app.handle_action(Action::ExecuteCommand("search hello world".to_string()));
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "hello world");
+
+    app.dispatch_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
+    assert_eq!(app.input.text(), "hello ");
+    assert_eq!(app.filter, "hello ");
+}
+
+#[test]
+fn enter_in_search_mode_opens_bulk_action_picker_on_highlighted_item() {
+    let mut data = TodoData::new();
+    let a = data.add("alpha");
+    let _ = data.add("beta");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("alp");
+    app.filter = "alp".to_string();
+    app.selected_index = 0;
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::ApplySearch)));
+    app.handle_action(action.unwrap());
+
+    match &app.mode {
+        Mode::BulkActionPicker { ids, category_names, .. } => {
+            assert_eq!(ids, &vec![a]);
+            assert!(category_names.is_empty());
+        }
+        other => panic!("expected BulkActionPicker, got {:?}", std::mem::discriminant(other)),
+    }
+    assert_eq!(app.filter, "alp");
+    assert!(app.input.text().is_empty());
+}
+
+#[test]
+fn ctrl_p_in_search_mode_cycles_priority_on_highlighted_item() {
+    let mut data = TodoData::new();
+    let id = data.add("foo");
+    let mut app = test_app(data);
+    let before = app.data.get(id).unwrap().priority;
+
+    app.mode = Mode::Searching;
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::CyclePriority(item_id, true)) if item_id == id));
+    app.handle_action(action.unwrap());
+
+    assert_ne!(app.data.get(id).unwrap().priority, before);
+    assert!(matches!(app.mode, Mode::Searching));
+}
+
+#[test]
+fn bulk_action_from_search_popup_returns_to_search_after_action() {
+    let mut data = TodoData::new();
+    let a = data.add("alpha");
+    let _ = data.add("beta");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("alp");
+    app.filter = "alp".to_string();
+    app.selected_index = 0;
+
+    app.handle_action(Action::ApplySearch);
+    assert!(matches!(app.mode, Mode::BulkActionPicker { .. }));
+
+    app.handle_action(Action::BulkActionSelect(1));
+    assert!(app.data.get(a).unwrap().archived);
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "alp");
+    assert_eq!(app.filter, "alp");
+}
+
+#[test]
+fn cancel_bulk_action_popup_from_search_returns_to_search() {
+    let mut data = TodoData::new();
+    let _ = data.add("alpha");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("alp");
+    app.filter = "alp".to_string();
+    app.selected_index = 0;
+
+    app.handle_action(Action::ApplySearch);
+    assert!(matches!(app.mode, Mode::BulkActionPicker { .. }));
+
+    app.handle_action(Action::CancelBulkActionPicker);
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "alp");
+}
+
+#[test]
+fn tab_in_search_mode_transitions_to_multiselect_with_filter_preserved() {
+    let mut data = TodoData::new();
+    let _ = data.add("alpha");
+    let _ = data.add("beta");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("alp");
+    app.filter = "alp".to_string();
+
+    app.dispatch_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert!(matches!(
+        app.mode,
+        Mode::MultiSelect { cmd: MultiSelectCmd::PickAction, .. }
+    ));
+    assert_eq!(app.filter, "alp");
+    assert!(app.input.text().is_empty());
+    assert_eq!(app.items().len(), 1);
+}
+
+#[test]
+fn ctrl_e_in_search_mode_edits_and_restores_search_on_submit() {
+    let mut data = TodoData::new();
+    let id = data.add("orig");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("or");
+    app.filter = "or".to_string();
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::EditItem(item_id)) if item_id == id));
+    app.handle_action(action.unwrap());
+
+    assert!(matches!(app.mode, Mode::Editing { edit_id: Some(item_id) } if item_id == id));
+    assert_eq!(app.input.text(), "orig");
+    assert_eq!(app.saved_search.as_deref(), Some("or"));
+
+    app.input.set_text("updated");
+    app.handle_action(Action::SubmitEdit);
+
+    assert_eq!(app.data.get(id).unwrap().text, "updated");
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "or");
+    assert_eq!(app.filter, "or");
+    assert!(app.saved_search.is_none());
+}
+
+#[test]
+fn ctrl_e_in_search_mode_restores_search_on_cancel() {
+    let mut data = TodoData::new();
+    let _ = data.add("orig");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("or");
+    app.filter = "or".to_string();
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    app.handle_action(action.unwrap());
+
+    app.handle_action(Action::CancelEdit);
+
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "or");
+    assert!(app.saved_search.is_none());
+}
+
+#[test]
+fn ctrl_o_in_search_mode_opens_category_picker_and_restores_search_on_pick() {
+    let mut data = TodoData::new();
+    let id = data.add("thing");
+    data.add_category("Work");
+    let mut app = test_app(data);
+    app.mode = Mode::Searching;
+    app.input.set_text("th");
+    app.filter = "th".to_string();
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::OpenCategoryPicker)));
+    app.handle_action(action.unwrap());
+
+    assert!(matches!(
+        app.mode,
+        Mode::CategoryPicker { target: CategoryPickerTarget::AssignItem, .. }
+    ));
+    assert!(app.input.text().is_empty());
+    assert_eq!(app.saved_search.as_deref(), Some("th"));
+
+    let work_idx = app
+        .categories()
+        .iter()
+        .position(|c| c == "Work")
+        .map(|i| i + 1)
+        .unwrap();
+    app.handle_action(Action::CategorySelect(work_idx));
+
+    assert_eq!(
+        app.data.get(id).and_then(|item| item.category.as_deref()),
+        Some("Work")
+    );
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "th");
+    assert!(app.saved_search.is_none());
+}
+
+#[test]
+fn ctrl_up_in_search_mode_reorders_highlighted_item() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+
+    app.mode = Mode::Searching;
+    app.selected_index = 1;
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::Reorder(item_id, -1)) if item_id == b));
+    app.handle_action(action.unwrap());
+
+    let ids: Vec<u64> = app.items().iter().map(|item| item.id).collect();
+    assert_eq!(ids, vec![b, a]);
+    assert!(matches!(app.mode, Mode::Searching));
+}
+
+#[test]
+fn slash_in_editing_mode_types_a_slash_instead_of_opening_command_palette() {
+    let mut app = test_app(TodoData::new());
+    app.mode = Mode::Editing { edit_id: None };
+    app.input.insert_str("foo");
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+    assert!(action.is_none());
+    assert!(matches!(app.mode, Mode::Editing { edit_id: None }));
+    assert_eq!(app.input.text(), "foo/");
+}
+
+#[test]
+fn up_and_down_arrows_jump_to_start_and_end_in_editing_prompt() {
+    let mut app = test_app(TodoData::new());
+    app.mode = Mode::Editing { edit_id: None };
+    app.input.insert_str("hello");
+
+    app.dispatch_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.input.cursor(), 0);
+
+    app.dispatch_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.input.cursor(), "hello".len());
+}
+
+#[test]
+fn select_command_opens_pick_action_multiselect() {
+    let mut app = test_app(TodoData::new());
+
+    app.handle_action(Action::ExecuteCommand("select".to_string()));
+
+    assert!(matches!(
+        app.mode,
+        Mode::MultiSelect {
+            cmd: MultiSelectCmd::PickAction,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn confirm_pick_action_multiselect_opens_bulk_action_picker() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::PickAction,
+        selected: [a, b].into_iter().collect(),
+        selected_categories: Default::default(),
+    };
+
+    app.handle_action(Action::ConfirmMultiSelect);
+
+    match &app.mode {
+        Mode::BulkActionPicker { ids, category_names, .. } => {
+            let mut sorted = ids.clone();
+            sorted.sort();
+            let mut expected = vec![a, b];
+            expected.sort();
+            assert_eq!(sorted, expected);
+            assert!(category_names.is_empty());
+        }
+        other => panic!("expected BulkActionPicker, got {:?}", std::mem::discriminant(other)),
+    }
+}
+
+#[test]
+fn confirm_pick_action_multiselect_with_empty_selection_returns_to_normal() {
+    let mut app = test_app(TodoData::new());
+    app.mode = Mode::MultiSelect {
+        cmd: MultiSelectCmd::PickAction,
+        selected: Default::default(),
+        selected_categories: Default::default(),
+    };
+
+    app.handle_action(Action::ConfirmMultiSelect);
+
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
+fn bulk_action_delete_opens_confirm_delete_popup() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a],
+        category_names: Vec::new(),
+        selected: 0,
+    };
+
+    app.handle_action(Action::BulkActionSelect(0));
+
+    assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+}
+
+#[test]
+fn bulk_action_archive_archives_and_records_undo() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a, b],
+        category_names: Vec::new(),
+        selected: 1,
+    };
+
+    app.handle_action(Action::BulkActionSelect(1));
+
+    assert!(app.data.get(a).unwrap().archived);
+    assert!(app.data.get(b).unwrap().archived);
+
+    app.handle_action(Action::Undo);
+    assert!(!app.data.get(a).unwrap().archived);
+    assert!(!app.data.get(b).unwrap().archived);
+}
+
+#[test]
+fn bulk_action_toggle_done_flips_done_flag() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a],
+        category_names: Vec::new(),
+        selected: 2,
+    };
+
+    app.handle_action(Action::BulkActionSelect(2));
+
+    assert!(app.data.get(a).unwrap().done);
+}
+
+#[test]
+fn bulk_action_labels_include_edit_only_for_single_item() {
+    let single = crate::app::bulk_action_labels(true);
+    let multi = crate::app::bulk_action_labels(false);
+    assert!(single.contains(&"Edit"));
+    assert!(!multi.contains(&"Edit"));
+    assert!(single.contains(&"Assign category"));
+    assert!(multi.contains(&"Assign category"));
+}
+
+#[test]
+fn bulk_action_edit_opens_editing_mode_on_single_item() {
+    let mut data = TodoData::new();
+    let a = data.add("hello");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a],
+        category_names: Vec::new(),
+        selected: 4,
+    };
+
+    app.handle_action(Action::BulkActionSelect(4));
+
+    assert!(matches!(app.mode, Mode::Editing { edit_id: Some(id) } if id == a));
+    assert_eq!(app.input.text(), "hello");
+}
+
+#[test]
+fn bulk_action_edit_is_no_op_with_multiple_ids() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a, b],
+        category_names: Vec::new(),
+        selected: 4,
+    };
+
+    app.handle_action(Action::BulkActionSelect(4));
+
+    assert!(matches!(app.mode, Mode::BulkActionPicker { .. }));
+}
+
+#[test]
+fn bulk_action_move_opens_category_picker_with_bulk_target() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    data.add_category("Work");
+    let mut app = test_app(data);
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![a, b],
+        category_names: Vec::new(),
+        selected: 3,
+    };
+
+    app.handle_action(Action::BulkActionSelect(3));
+
+    match &app.mode {
+        Mode::CategoryPicker {
+            target: CategoryPickerTarget::AssignBulk(ids),
+            ..
+        } => {
+            let mut sorted = ids.clone();
+            sorted.sort();
+            let mut expected = vec![a, b];
+            expected.sort();
+            assert_eq!(sorted, expected);
+        }
+        _ => panic!("expected CategoryPicker with AssignBulk target"),
+    }
+
+    let work_idx = app
+        .categories()
+        .iter()
+        .position(|c| c == "Work")
+        .map(|i| i + 1)
+        .unwrap();
+    app.handle_action(Action::CategorySelect(work_idx));
+
+    assert_eq!(
+        app.data.get(a).and_then(|item| item.category.as_deref()),
+        Some("Work")
+    );
+    assert_eq!(
+        app.data.get(b).and_then(|item| item.category.as_deref()),
+        Some("Work")
+    );
+}
+
+#[test]
+fn ctrl_z_after_archive_one_restores_the_archived_item_not_an_older_delete() {
+    let mut data = TodoData::new();
+    let older = data.add("older delete");
+    let target = data.add("archive me");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::DeleteItem(older));
+    app.handle_action(Action::ConfirmDeleteYes);
+    assert!(app.data.get(older).is_none());
+
+    app.handle_action(Action::ExecuteCommand("archive one".to_string()));
+    assert!(app.data.get(target).unwrap().archived);
+
+    app.handle_action(Action::Undo);
+    assert!(!app.data.get(target).unwrap().archived);
+    assert!(app.data.get(older).is_none());
+}
+
+#[test]
+fn ctrl_z_after_archive_done_restores_completed_items_to_unarchived() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    data.toggle_done(a);
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ExecuteCommand("archive done".to_string()));
+    assert!(app.data.get(a).unwrap().archived);
+
+    app.handle_action(Action::Undo);
+    assert!(!app.data.get(a).unwrap().archived);
+}
+
+#[test]
+fn theme_registry_lists_light_group_first_and_every_entry_has_by_name() {
+    let registry = Theme::theme_registry();
+    let mut seen_dark = false;
+    for (name, is_light) in registry {
+        assert!(Theme::by_name(name).is_some(), "missing by_name for {name}");
+        if !*is_light {
+            seen_dark = true;
+        } else {
+            assert!(!seen_dark, "light theme {name} appears after a dark one");
+        }
+    }
+    assert!(registry.iter().any(|(_, light)| *light), "no light themes");
+    assert!(registry.iter().any(|(_, light)| !*light), "no dark themes");
+}
+
+#[test]
+fn ctrl_z_after_archive_all_restores_all_visible_items() {
+    let mut data = TodoData::new();
+    let a = data.add("a");
+    let b = data.add("b");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ExecuteCommand("archive all".to_string()));
+    assert!(app.data.get(a).unwrap().archived);
+    assert!(app.data.get(b).unwrap().archived);
+
+    app.handle_action(Action::Undo);
+    assert!(!app.data.get(a).unwrap().archived);
+    assert!(!app.data.get(b).unwrap().archived);
 }

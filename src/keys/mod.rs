@@ -215,6 +215,14 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
     match key.code {
         KeyCode::Enter => Some(Action::SubmitEdit),
         KeyCode::Esc => Some(Action::CancelEdit),
+        KeyCode::Up if key.modifiers.is_empty() => {
+            input.move_home();
+            None
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            input.move_end();
+            None
+        }
         _ => {
             if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
                 if let KeyCode::Char('V') = key.code {
@@ -260,6 +268,15 @@ pub fn handle_archive_picker(key: KeyEvent) -> Option<Action> {
         KeyCode::Up => Some(Action::SelectPrev),
         KeyCode::Down => Some(Action::SelectNext),
         KeyCode::Esc => Some(Action::CancelArchivePicker),
+        _ => None,
+    }
+}
+
+pub fn handle_bulk_action_picker(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Esc => Some(Action::CancelBulkActionPicker),
         _ => None,
     }
 }
@@ -463,26 +480,17 @@ pub fn handle_due_date_calendar(
     }
 }
 
-pub fn handle_search(key: KeyEvent, query: &mut String) -> Option<Action> {
+pub fn handle_search(
+    key: KeyEvent,
+    input: &mut crate::ui::input::InputBuffer,
+) -> Option<Action> {
     match key.code {
         KeyCode::Enter => Some(Action::ApplySearch),
         KeyCode::Esc => Some(Action::ClearSearch),
-        KeyCode::Backspace => {
-            query.pop();
-            None
-        }
-        KeyCode::Delete => {
-            query.pop();
-            None
-        }
+        KeyCode::Up if key.modifiers.is_empty() => Some(Action::SelectPrev),
+        KeyCode::Down if key.modifiers.is_empty() => Some(Action::SelectNext),
         _ => {
-            if let KeyCode::Char(c) = key.code {
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
-                {
-                    query.push(c);
-                }
-            }
+            handle_text_input_key(key, input);
             None
         }
     }

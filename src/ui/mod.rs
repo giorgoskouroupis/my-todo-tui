@@ -66,7 +66,6 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         layout[2],
         state.input,
         state.mode,
-        state.filter,
         state.pane,
         base_theme,
     );
@@ -80,6 +79,20 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         render_priority_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::ArchivePicker { selected } = state.mode {
         render_archive_picker(frame, popup_area, *selected, state.theme);
+    } else if let Mode::BulkActionPicker {
+        selected,
+        ids,
+        category_names,
+    } = state.mode
+    {
+        render_bulk_action_picker(
+            frame,
+            popup_area,
+            *selected,
+            ids.len(),
+            category_names.len(),
+            state.theme,
+        );
     } else if let Mode::FilterPicker { selected } = state.mode {
         render_filter_picker(frame, popup_area, *selected, state.theme);
     } else if let Mode::DueDateFilterPicker { selected } = state.mode {
@@ -145,7 +158,6 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
                 layout[2],
                 state.input,
                 state.mode,
-                state.filter,
                 state.pane,
                 state.theme,
             );
@@ -257,7 +269,7 @@ fn calendar_prompt_anchor(input_area: Rect) -> Rect {
 }
 
 fn calendar_item_anchor(list_area: Rect, items: &[TodoItem], selected_index: usize) -> Rect {
-    let content_width = list_area.width.saturating_sub(7) as usize;
+    let content_width = list_area.width.saturating_sub(5) as usize;
     let mut y = list_area.y;
     for item in items.iter().take(selected_index) {
         let text_lines = wrap_text(&item.text, content_width.max(10)).len() as u16;
@@ -507,7 +519,7 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: &T
     };
 
     let is_active = *state.pane == Pane::Items;
-    let text_width = area.width.saturating_sub(7) as usize;
+    let text_width = area.width.saturating_sub(5) as usize;
     let category_filter = if state.show_archived {
         None
     } else {
@@ -693,8 +705,9 @@ fn command_display_prefix(command: &str, parent_command: Option<&str>) -> &'stat
 }
 
 fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
-    let names = Theme::theme_names();
-    let height = names.len() as u16 + 2;
+    let registry = Theme::theme_registry();
+    let group_count = 2;
+    let height = registry.len() as u16 + group_count + 2;
     let width = 30u16.min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
@@ -707,7 +720,24 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
     );
 
     let mut lines = Vec::new();
-    for (i, name) in names.iter().enumerate() {
+    let mut last_group: Option<bool> = None;
+    for (i, (name, is_light)) in registry.iter().enumerate() {
+        if last_group != Some(*is_light) {
+            let header = if *is_light { "Light" } else { "Dark" };
+            lines.push(
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        header.to_string(),
+                        Style::default()
+                            .fg(theme.text_muted)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
+                .style(Style::default().bg(theme.bg_primary)),
+            );
+            last_group = Some(*is_light);
+        }
         let is_active = *name == theme.name;
         let is_highlighted = i == selected;
         let bg = if is_highlighted {
@@ -718,7 +748,7 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
 
         lines.push(
             Line::from(vec![
-                Span::raw("  "),
+                Span::raw("    "),
                 Span::styled(
                     if is_active { "\u{25cf} " } else { "  " },
                     Style::default().fg(theme.accent),
@@ -866,6 +896,26 @@ fn render_archive_picker(frame: &mut Frame, area: Rect, selected: usize, theme: 
     );
 }
 
+fn render_bulk_action_picker(
+    frame: &mut Frame,
+    area: Rect,
+    selected: usize,
+    item_count: usize,
+    category_count: usize,
+    theme: &Theme,
+) {
+    let counts = if category_count == 0 {
+        format!(" Action ({} items) ", item_count)
+    } else if item_count == 0 {
+        format!(" Action ({} cats) ", category_count)
+    } else {
+        format!(" Action ({} items, {} cats) ", item_count, category_count)
+    };
+    let single = item_count == 1 && category_count == 0;
+    let labels = crate::app::bulk_action_labels(single);
+    render_menu_popup(frame, area, &counts, &labels, selected, 32, theme);
+}
+
 fn render_filter_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
     render_menu_popup(
         frame,
@@ -919,7 +969,7 @@ fn render_category_picker(
 
     let mut lines = Vec::new();
     let entries: [&str; 1] = [match target {
-        CategoryPickerTarget::AssignItem => "None",
+        CategoryPickerTarget::AssignItem | CategoryPickerTarget::AssignBulk(_) => "None",
         CategoryPickerTarget::MoveCategory(_) => "Root",
     }];
     for (i, label) in entries
@@ -963,6 +1013,7 @@ fn render_category_picker(
         .border_style(Style::default().fg(theme.border_default))
         .title(match target {
             CategoryPickerTarget::AssignItem => " Assign Category ",
+            CategoryPickerTarget::AssignBulk(_) => " Assign Category (bulk) ",
             CategoryPickerTarget::MoveCategory(_) => " Move Category ",
         })
         .title_style(
@@ -1368,7 +1419,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let key_lines: [(&str, &str, bool); 42] = [
+    let key_lines: [(&str, &str, bool); 43] = [
         ("Global", "", true),
         ("Ctrl+C", "Quit", false),
         ("Ctrl+H", "Help", false),
@@ -1394,6 +1445,7 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Tab", "Autocomplete", false),
         ("", "", false),
         ("Text input", "", true),
+        ("↑/↓", "Line start/end", false),
         ("Ctrl+←/→", "Word jump", false),
         ("Ctrl+Shift+V", "Paste", false),
         ("", "", false),
@@ -1783,7 +1835,6 @@ fn render_input(
     area: Rect,
     input: &InputBuffer,
     mode: &Mode,
-    filter: &str,
     pane: &Pane,
     theme: &Theme,
 ) {
@@ -1794,8 +1845,23 @@ fn render_input(
 
     let (display_text, cursor_pos) = match mode {
         Mode::Searching => {
-            let line =
-                render_prompt_input_line("  Search: ", filter, filter.len(), input_width, theme);
+            let line = if input.is_empty() {
+                Line::from(vec![
+                    Span::styled("  Search: ", Style::default().fg(theme.accent)),
+                    Span::styled(
+                        "[type to filter, \u{2191}/\u{2193} nav, Tab bulk-select, Enter action, Esc clear]",
+                        Style::default().fg(theme.warning),
+                    ),
+                ])
+            } else {
+                render_prompt_input_line(
+                    "  Search: ",
+                    input.text(),
+                    input.cursor(),
+                    input_width,
+                    theme,
+                )
+            };
             (line, None::<u16>)
         }
         Mode::Command { .. } => {
@@ -1815,7 +1881,10 @@ fn render_input(
             selected_categories,
         } => {
             let target = if matches!(pane, Pane::Categories)
-                && matches!(cmd, crate::app::MultiSelectCmd::Delete)
+                && matches!(
+                    cmd,
+                    crate::app::MultiSelectCmd::Delete | crate::app::MultiSelectCmd::PickAction
+                )
             {
                 "categories"
             } else {
@@ -1826,6 +1895,7 @@ fn render_input(
                 crate::app::MultiSelectCmd::ToggleDone => "Bulk done",
                 crate::app::MultiSelectCmd::Archive => "Bulk archive",
                 crate::app::MultiSelectCmd::RestoreArchive => "Bulk restore",
+                crate::app::MultiSelectCmd::PickAction => "Bulk select",
             };
             let counts = if selected_categories.is_empty() {
                 format!("{} items", selected.len())
@@ -1836,14 +1906,22 @@ fn render_input(
                     selected_categories.len()
                 )
             };
-            let select_all = if matches!(cmd, crate::app::MultiSelectCmd::Delete) {
+            let select_all = if matches!(
+                cmd,
+                crate::app::MultiSelectCmd::Delete | crate::app::MultiSelectCmd::PickAction
+            ) {
                 " Ctrl+A all,"
             } else {
                 ""
             };
+            let trailing = if matches!(cmd, crate::app::MultiSelectCmd::PickAction) {
+                "Enter choose action"
+            } else {
+                "Enter apply"
+            };
             let line = Line::from(vec![Span::styled(
                 format!(
-                    "  [{action}: {counts} selected | select {target},{select_all} Enter apply, Esc cancel]"
+                    "  [{action}: {counts} selected | Space toggle {target},{select_all} {trailing}, Esc cancel]"
                 ),
                 Style::default().fg(theme.warning),
             )]);
@@ -1939,6 +2017,13 @@ fn render_input(
             (line, None)
         }
         Mode::ArchivePicker { .. } => {
+            let line = Line::from(vec![Span::styled(
+                "  [Up/Down choose, Enter apply, Esc cancel]",
+                Style::default().fg(theme.warning),
+            )]);
+            (line, None)
+        }
+        Mode::BulkActionPicker { .. } => {
             let line = Line::from(vec![Span::styled(
                 "  [Up/Down choose, Enter apply, Esc cancel]",
                 Style::default().fg(theme.warning),

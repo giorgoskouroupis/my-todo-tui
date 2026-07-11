@@ -120,6 +120,86 @@ impl Theme {
         }
     }
 
+    pub const fn one_light() -> Self {
+        Self {
+            name: "one-light",
+            bg_primary: Color::Rgb(0xfa, 0xfa, 0xfa),
+            bg_secondary: Color::Rgb(0xef, 0xef, 0xef),
+            bg_tertiary: Color::Rgb(0xdc, 0xe2, 0xea),
+            accent: Color::Rgb(0x40, 0x78, 0xf2),
+            accent_selection: Color::Rgb(0xdc, 0xe2, 0xea),
+            success: Color::Rgb(0x50, 0xa1, 0x4f),
+            warning: Color::Rgb(0xc1, 0x84, 0x01),
+            error: Color::Rgb(0xe4, 0x56, 0x49),
+            text_primary: Color::Rgb(0x38, 0x3a, 0x42),
+            text_secondary: Color::Rgb(0x4f, 0x52, 0x5c),
+            text_muted: Color::Rgb(0xa0, 0xa1, 0xa7),
+            text_disabled: Color::Rgb(0xa0, 0xa1, 0xa7),
+            text_placeholder: Color::Rgb(0xa0, 0xa1, 0xa7),
+            border_default: Color::Rgb(0xd0, 0xd0, 0xd0),
+        }
+    }
+
+    pub const fn catppuccin_latte() -> Self {
+        Self {
+            name: "catppuccin-latte",
+            bg_primary: Color::Rgb(0xef, 0xf1, 0xf5),
+            bg_secondary: Color::Rgb(0xe6, 0xe9, 0xef),
+            bg_tertiary: Color::Rgb(0xcc, 0xd0, 0xda),
+            accent: Color::Rgb(0x1e, 0x66, 0xf5),
+            accent_selection: Color::Rgb(0xcc, 0xd0, 0xda),
+            success: Color::Rgb(0x40, 0xa0, 0x2b),
+            warning: Color::Rgb(0xdf, 0x8e, 0x1d),
+            error: Color::Rgb(0xd2, 0x0f, 0x39),
+            text_primary: Color::Rgb(0x4c, 0x4f, 0x69),
+            text_secondary: Color::Rgb(0x6c, 0x6f, 0x85),
+            text_muted: Color::Rgb(0x9c, 0xa0, 0xb0),
+            text_disabled: Color::Rgb(0x9c, 0xa0, 0xb0),
+            text_placeholder: Color::Rgb(0x9c, 0xa0, 0xb0),
+            border_default: Color::Rgb(0xbc, 0xc0, 0xcc),
+        }
+    }
+
+    pub const fn solarized_light() -> Self {
+        Self {
+            name: "solarized-light",
+            bg_primary: Color::Rgb(0xfd, 0xf6, 0xe3),
+            bg_secondary: Color::Rgb(0xee, 0xe8, 0xd5),
+            bg_tertiary: Color::Rgb(0xe3, 0xdb, 0xb8),
+            accent: Color::Rgb(0x26, 0x8b, 0xd2),
+            accent_selection: Color::Rgb(0xe3, 0xdb, 0xb8),
+            success: Color::Rgb(0x85, 0x99, 0x00),
+            warning: Color::Rgb(0xb5, 0x89, 0x00),
+            error: Color::Rgb(0xdc, 0x32, 0x2f),
+            text_primary: Color::Rgb(0x58, 0x6e, 0x75),
+            text_secondary: Color::Rgb(0x65, 0x7b, 0x83),
+            text_muted: Color::Rgb(0x93, 0xa1, 0xa1),
+            text_disabled: Color::Rgb(0x93, 0xa1, 0xa1),
+            text_placeholder: Color::Rgb(0x93, 0xa1, 0xa1),
+            border_default: Color::Rgb(0xd6, 0xce, 0xac),
+        }
+    }
+
+    pub const fn gruvbox_light() -> Self {
+        Self {
+            name: "gruvbox-light",
+            bg_primary: Color::Rgb(0xfb, 0xf1, 0xc7),
+            bg_secondary: Color::Rgb(0xf2, 0xe5, 0xbc),
+            bg_tertiary: Color::Rgb(0xeb, 0xdb, 0xb2),
+            accent: Color::Rgb(0x07, 0x66, 0x78),
+            accent_selection: Color::Rgb(0xeb, 0xdb, 0xb2),
+            success: Color::Rgb(0x79, 0x74, 0x0e),
+            warning: Color::Rgb(0xb5, 0x76, 0x14),
+            error: Color::Rgb(0xcc, 0x24, 0x1d),
+            text_primary: Color::Rgb(0x3c, 0x38, 0x36),
+            text_secondary: Color::Rgb(0x50, 0x49, 0x45),
+            text_muted: Color::Rgb(0x7c, 0x6f, 0x64),
+            text_disabled: Color::Rgb(0x7c, 0x6f, 0x64),
+            text_placeholder: Color::Rgb(0x7c, 0x6f, 0x64),
+            border_default: Color::Rgb(0xd5, 0xc4, 0xa1),
+        }
+    }
+
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
             "one-dark" => Some(Self::one_dark()),
@@ -127,12 +207,34 @@ impl Theme {
             "dracula" => Some(Self::dracula()),
             "nord" => Some(Self::nord()),
             "gruvbox" => Some(Self::gruvbox()),
+            "one-light" => Some(Self::one_light()),
+            "catppuccin-latte" => Some(Self::catppuccin_latte()),
+            "solarized-light" => Some(Self::solarized_light()),
+            "gruvbox-light" => Some(Self::gruvbox_light()),
             _ => None,
         }
     }
 
-    pub const fn theme_names() -> &'static [&'static str] {
-        &["catppuccin-mocha", "dracula", "gruvbox", "nord", "one-dark"]
+    /// `(name, is_light)`, ordered so that all light themes appear before dark ones.
+    pub const fn theme_registry() -> &'static [(&'static str, bool)] {
+        &[
+            ("catppuccin-latte", true),
+            ("gruvbox-light", true),
+            ("one-light", true),
+            ("solarized-light", true),
+            ("catppuccin-mocha", false),
+            ("dracula", false),
+            ("gruvbox", false),
+            ("nord", false),
+            ("one-dark", false),
+        ]
+    }
+
+    pub fn theme_names() -> Vec<&'static str> {
+        Self::theme_registry()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect()
     }
 }
 

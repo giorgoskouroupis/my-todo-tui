@@ -347,6 +347,16 @@ impl TodoData {
         Some(self.items.remove(idx))
     }
 
+    pub fn restore_item(&mut self, item: TodoItem) {
+        if item.id >= self.next_id {
+            self.next_id = item.id + 1;
+        }
+        if !self.items.iter().any(|existing| existing.id == item.id) {
+            self.items.push(item);
+            self.items.sort_by_key(|i| i.order);
+        }
+    }
+
     pub fn reorder(&mut self, id: u64, direction: i32) -> bool {
         let idx = self.items.iter().position(|i| i.id == id);
         let Some(idx) = idx else { return false };

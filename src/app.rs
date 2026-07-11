@@ -48,7 +48,20 @@ pub struct App {
     pub pending_due_date: Option<String>,
     category_selection_memory: HashMap<String, usize>,
     popup_back_stack: Vec<PopupBackTarget>,
+    undo_stack: Vec<UndoEntry>,
+    saved_search: Option<String>,
 }
+
+enum UndoEntry {
+    Delete(Vec<TodoItem>),
+    Archive {
+        item_ids: Vec<u64>,
+        category_names: Vec<String>,
+        previous_archived: bool,
+    },
+}
+
+const UNDO_STACK_LIMIT: usize = 20;
 
 impl App {
     pub fn new() -> Self {
@@ -75,6 +88,50 @@ impl App {
             pending_due_date: None,
             category_selection_memory: HashMap::new(),
             popup_back_stack: Vec::new(),
+            undo_stack: Vec::new(),
+            saved_search: None,
+        }
+    }
+
+    fn return_after_secondary_mode(&mut self) {
+        if let Some(search) = self.saved_search.take() {
+            self.input.set_text(&search);
+            self.filter = search;
+            self.mode = Mode::Searching;
+        } else {
+            self.input.clear();
+            self.mode = Mode::Normal;
+        }
+        self.clamp_selection();
+    }
+
+    fn push_undo_delete(&mut self, items: Vec<TodoItem>) {
+        if items.is_empty() {
+            return;
+        }
+        self.push_undo(UndoEntry::Delete(items));
+    }
+
+    fn push_undo_archive(
+        &mut self,
+        item_ids: Vec<u64>,
+        category_names: Vec<String>,
+        previous_archived: bool,
+    ) {
+        if item_ids.is_empty() && category_names.is_empty() {
+            return;
+        }
+        self.push_undo(UndoEntry::Archive {
+            item_ids,
+            category_names,
+            previous_archived,
+        });
+    }
+
+    fn push_undo(&mut self, entry: UndoEntry) {
+        self.undo_stack.push(entry);
+        if self.undo_stack.len() > UNDO_STACK_LIMIT {
+            self.undo_stack.remove(0);
         }
     }
 
@@ -255,9 +312,7 @@ impl App {
         from_normal: bool,
     ) {
         if from_new || from_normal {
-            self.input.clear();
-            self.mode = Mode::Normal;
-            self.clamp_selection();
+            self.return_after_secondary_mode();
         } else {
             self.input.set_text(&saved_text);
             self.mode = Mode::Editing { edit_id };
@@ -361,17 +416,37 @@ impl App {
             return;
         }
 
-        if let Some(category) = self.selected_category_path() {
+        let (item_ids, category_names) = if let Some(category) = self.selected_category_path() {
+            let ids: Vec<u64> = self
+                .data
+                .items()
+                .iter()
+                .filter(|item| {
+                    category_matches(item.category.as_deref(), &category)
+                        && item.archived != archived
+                })
+                .map(|item| item.id)
+                .collect();
             self.data.set_category_archived(&category, archived);
+            (ids, vec![category])
         } else {
-            let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+            let ids: Vec<u64> = self
+                .items()
+                .iter()
+                .filter(|item| item.archived != archived)
+                .map(|item| item.id)
+                .collect();
             let categories = self.categories();
-            for id in ids {
-                self.data.set_archived(id, archived);
+            for id in &ids {
+                self.data.set_archived(*id, archived);
             }
-            for category in categories {
-                self.data.set_category_archived(&category, archived);
+            for category in &categories {
+                self.data.set_category_archived(category, archived);
             }
+            (ids, categories)
+        };
+        if !item_ids.is_empty() || !category_names.is_empty() {
+            self.push_undo_archive(item_ids, category_names, !archived);
         }
         self.mark_dirty();
         self.category_index = self.category_index.min(self.category_entries().len());
@@ -379,22 +454,88 @@ impl App {
     }
 
     fn set_visible_archived(&mut self, archived: bool) {
-        let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
+        let ids: Vec<u64> = self
+            .items()
+            .iter()
+            .filter(|item| item.archived != archived)
+            .map(|item| item.id)
+            .collect();
         let categories = if self.pane == Pane::Categories {
             self.categories()
         } else {
             Vec::new()
         };
 
-        for id in ids {
-            self.data.set_archived(id, archived);
+        for id in &ids {
+            self.data.set_archived(*id, archived);
         }
-        for category in categories {
-            self.data.set_category_archived(&category, archived);
+        for category in &categories {
+            self.data.set_category_archived(category, archived);
+        }
+        if !ids.is_empty() || !categories.is_empty() {
+            self.push_undo_archive(ids, categories, !archived);
         }
         self.mark_dirty();
         self.category_index = self.category_index.min(self.category_entries().len());
         self.clamp_selection();
+    }
+
+    fn archive_single_visible_item(&mut self, archived: bool) {
+        if let Some(id) = self.items().get(self.selected_index()).map(|item| item.id) {
+            if self.data.get(id).is_some_and(|item| item.archived != archived) {
+                self.data.set_archived(id, archived);
+                self.push_undo_archive(vec![id], Vec::new(), !archived);
+                self.mark_dirty();
+            }
+        }
+    }
+
+    fn build_confirm_delete_mode(
+        &self,
+        selected_ids: Vec<u64>,
+        selected_categories: Vec<String>,
+    ) -> Mode {
+        let mut all_ids: Vec<u64> = selected_ids;
+        let mut seen: HashSet<u64> = all_ids.iter().copied().collect();
+        for name in &selected_categories {
+            for item in self.data.items() {
+                if category_matches(item.category.as_deref(), name) && seen.insert(item.id) {
+                    all_ids.push(item.id);
+                }
+            }
+        }
+        let mut texts: Vec<String> = all_ids
+            .iter()
+            .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
+            .collect();
+        texts.extend(
+            selected_categories
+                .iter()
+                .map(|name| format!("[category] {name}")),
+        );
+        Mode::ConfirmDelete {
+            ids: all_ids,
+            texts,
+            category_names: selected_categories,
+        }
+    }
+
+    fn archive_done_items(&mut self) {
+        let ids: Vec<u64> = self
+            .data
+            .items()
+            .iter()
+            .filter(|item| item.done && !item.archived)
+            .map(|item| item.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        for id in &ids {
+            self.data.set_archived(*id, true);
+        }
+        self.push_undo_archive(ids, Vec::new(), false);
+        self.mark_dirty();
     }
 
     fn move_category_to(&mut self, old_category: &str, destination: Option<&str>) {
@@ -497,8 +638,14 @@ impl App {
             Mode::DueDateFilterPicker { .. } => Some(3),
             Mode::CategoryPicker { target, .. } => Some(match target {
                 CategoryPickerTarget::MoveCategory(_) => self.root_categories().len(),
-                CategoryPickerTarget::AssignItem => self.categories().len(),
+                CategoryPickerTarget::AssignItem | CategoryPickerTarget::AssignBulk(_) => {
+                    self.categories().len()
+                }
             }),
+            Mode::BulkActionPicker { ids, category_names, .. } => {
+                let single = ids.len() == 1 && category_names.is_empty();
+                Some(bulk_action_labels(single).len().saturating_sub(1))
+            }
             Mode::CategoryFilterPicker { .. } => Some(self.category_entries().len()),
             Mode::CategoryCreateChoice { .. } => Some(1),
             Mode::CategoryParentPicker { .. } => {
@@ -634,9 +781,7 @@ impl App {
         {
             return Some(Action::ExecuteCommand("keybindings".to_string()));
         }
-        if key.code == KeyCode::Char('/')
-            && !matches!(self.mode, Mode::Command { .. } | Mode::CategoryAdd { .. })
-        {
+        if key.code == KeyCode::Char('/') && !is_text_mode {
             return Some(Action::StartCommand);
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -650,11 +795,61 @@ impl App {
         }
         if key.code == KeyCode::Char('d')
             && key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(&self.mode, Mode::Normal)
+            && matches!(&self.mode, Mode::Normal | Mode::Searching)
             && self.pane == Pane::Items
             && self.selected_index() < self.items().len()
         {
             return Some(Action::SetDueDate);
+        }
+        if key.code == KeyCode::Char('z')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(&self.mode, Mode::Normal)
+            && !self.undo_stack.is_empty()
+        {
+            return Some(Action::Undo);
+        }
+
+        if matches!(self.mode, Mode::Searching) && key.code == KeyCode::Tab {
+            self.filter = self.input.text().to_string();
+            self.input.clear();
+            self.mode = Mode::MultiSelect {
+                cmd: MultiSelectCmd::PickAction,
+                selected: HashSet::new(),
+                selected_categories: HashSet::new(),
+            };
+            self.pane = Pane::Items;
+            self.clamp_selection();
+            return None;
+        }
+
+        if matches!(self.mode, Mode::Searching)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let items = self.items();
+            let selected_id = items.get(self.selected_index()).map(|item| item.id);
+            if let Some(id) = selected_id {
+                match key.code {
+                    KeyCode::Char('p') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        return Some(Action::CyclePriority(id, true));
+                    }
+                    KeyCode::Char('P') | KeyCode::Char('p') => {
+                        return Some(Action::CyclePriority(id, false));
+                    }
+                    KeyCode::Up => return Some(Action::Reorder(id, -1)),
+                    KeyCode::Down => return Some(Action::Reorder(id, 1)),
+                    KeyCode::Char('*') => return Some(Action::TogglePin(id)),
+                    KeyCode::Char('e') => {
+                        self.saved_search = Some(self.input.text().to_string());
+                        return Some(Action::EditItem(id));
+                    }
+                    KeyCode::Char('o') => {
+                        self.saved_search = Some(self.input.text().to_string());
+                        self.input.clear();
+                        return Some(Action::OpenCategoryPicker);
+                    }
+                    _ => {}
+                }
+            }
         }
 
         let is_pane_mode = matches!(self.mode, Mode::Normal | Mode::MultiSelect { .. });
@@ -747,7 +942,11 @@ impl App {
                     keys::handle_editing(key, &mut self.input)
                 }
             }
-            Mode::Searching => keys::handle_search(key, &mut self.filter),
+            Mode::Searching => {
+                let action = keys::handle_search(key, &mut self.input);
+                self.filter = self.input.text().to_string();
+                action
+            }
             Mode::Command { selected } => {
                 if let KeyCode::Enter = key.code {
                     return resolve_command_input(self.input.text(), *selected)
@@ -866,6 +1065,13 @@ impl App {
                 }
                 action
             }
+            Mode::BulkActionPicker { selected, .. } => {
+                let action = keys::handle_bulk_action_picker(key);
+                if action.is_none() && key.code == KeyCode::Enter {
+                    return Some(Action::BulkActionSelect(*selected));
+                }
+                action
+            }
             Mode::FilterPicker { selected } => {
                 let action = keys::handle_filter_picker(key);
                 if action.is_none() && key.code == KeyCode::Enter {
@@ -915,6 +1121,7 @@ impl App {
             Mode::CategoryParentPicker { .. } => Some(Action::SelectCategoryParent(usize::MAX)),
             Mode::SortPicker { selected, .. } => Some(Action::SortSelect(*selected)),
             Mode::ArchivePicker { selected } => Some(Action::ArchiveSelect(*selected)),
+            Mode::BulkActionPicker { selected, .. } => Some(Action::BulkActionSelect(*selected)),
             Mode::FilterPicker { selected } => Some(Action::FilterSelect(*selected)),
             Mode::DueDateFilterPicker { selected } => Some(Action::DueDateFilterSelect(*selected)),
             _ => None,
@@ -1061,14 +1268,12 @@ impl App {
                         prompt_focused: false,
                     };
                 } else {
-                    self.input.clear();
-                    self.mode = Mode::Normal;
-                    self.clamp_selection();
+                    self.return_after_secondary_mode();
                 }
             }
             Action::CancelEdit => {
-                self.input.clear();
-                if let Mode::Editing { edit_id: None } = &self.mode {
+                let was_new_edit = matches!(self.mode, Mode::Editing { edit_id: None });
+                if was_new_edit {
                     if let Some(ref cat) = self.category_filter {
                         if !self
                             .categories()
@@ -1081,7 +1286,7 @@ impl App {
                     }
                     self.pending_due_date = None;
                 }
-                self.mode = Mode::Normal;
+                self.return_after_secondary_mode();
             }
             Action::ToggleDone(id) => {
                 self.data.toggle_done(id);
@@ -1133,11 +1338,27 @@ impl App {
                 }
             }
             Action::ApplySearch => {
-                self.mode = Mode::Normal;
+                self.filter = self.input.text().to_string();
+                self.input.clear();
+                let selected_id = self
+                    .items()
+                    .get(self.selected_index())
+                    .map(|item| item.id);
+                if let Some(id) = selected_id {
+                    self.saved_search = Some(self.filter.clone());
+                    self.mode = Mode::BulkActionPicker {
+                        ids: vec![id],
+                        category_names: Vec::new(),
+                        selected: 0,
+                    };
+                } else {
+                    self.mode = Mode::Normal;
+                }
                 self.clamp_selection();
             }
             Action::ClearSearch => {
                 self.filter.clear();
+                self.input.clear();
                 self.mode = Mode::Normal;
                 self.clamp_selection();
             }
@@ -1178,13 +1399,10 @@ impl App {
 
                 match cmd.as_str() {
                     "search" | "s" => {
-                        if let Some(query) = arg {
-                            self.filter = query;
-                            self.mode = Mode::Searching;
-                        } else {
-                            self.filter.clear();
-                            self.mode = Mode::Searching;
-                        }
+                        let query = arg.unwrap_or_default();
+                        self.filter = query.clone();
+                        self.input.set_text(&query);
+                        self.mode = Mode::Searching;
                     }
                     "delete" | "d" => {
                         self.mode = Mode::MultiSelect {
@@ -1201,6 +1419,13 @@ impl App {
                             selected_categories: HashSet::new(),
                         };
                     }
+                    "select" => {
+                        self.mode = Mode::MultiSelect {
+                            cmd: MultiSelectCmd::PickAction,
+                            selected: HashSet::new(),
+                            selected_categories: HashSet::new(),
+                        };
+                    }
                     "clear" | "c" => {
                         self.data.clear_done();
                         self.mark_dirty();
@@ -1212,12 +1437,7 @@ impl App {
                                 if self.pane == Pane::Categories {
                                     self.set_current_category_archived(true);
                                 } else {
-                                    if let Some(id) =
-                                        self.items().get(self.selected_index()).map(|item| item.id)
-                                    {
-                                        self.data.set_archived(id, true);
-                                        self.mark_dirty();
-                                    }
+                                    self.archive_single_visible_item(true);
                                 }
                                 self.mode = Mode::Normal;
                             }
@@ -1233,17 +1453,7 @@ impl App {
                                 self.mode = Mode::Normal;
                             }
                             Some("done") => {
-                                let ids: Vec<u64> = self
-                                    .data
-                                    .items()
-                                    .iter()
-                                    .filter(|item| item.done && !item.archived)
-                                    .map(|item| item.id)
-                                    .collect();
-                                for id in ids {
-                                    self.data.set_archived(id, true);
-                                }
-                                self.mark_dirty();
+                                self.archive_done_items();
                                 self.mode = Mode::Normal;
                             }
                             Some("all") => {
@@ -1271,13 +1481,8 @@ impl App {
                                 } else if self.pane == Pane::Categories {
                                     self.set_current_category_archived(false);
                                 } else {
-                                    if let Some(id) =
-                                        self.items().get(self.selected_index()).map(|item| item.id)
-                                    {
-                                        self.data.set_archived(id, false);
-                                    }
+                                    self.archive_single_visible_item(false);
                                 }
-                                self.mark_dirty();
                                 self.mode = Mode::Normal;
                             }
                             _ => {
@@ -1301,12 +1506,7 @@ impl App {
                                 if self.pane == Pane::Categories {
                                     self.set_current_category_archived(false);
                                 } else {
-                                    if let Some(id) =
-                                        self.items().get(self.selected_index()).map(|item| item.id)
-                                    {
-                                        self.data.set_archived(id, false);
-                                        self.mark_dirty();
-                                    }
+                                    self.archive_single_visible_item(false);
                                 }
                             }
                         }
@@ -1481,7 +1681,7 @@ impl App {
                 }
                 self.completions.clear();
                 self.completion_index = 0;
-                if !matches!(self.mode, Mode::RenameInput { .. }) {
+                if !matches!(self.mode, Mode::RenameInput { .. } | Mode::Searching) {
                     self.input.clear();
                 }
                 self.clamp_selection();
@@ -1522,22 +1722,8 @@ impl App {
                         let ids: Vec<u64> = self.items().iter().map(|item| item.id).collect();
                         (ids, Vec::new())
                     };
-
-                    let mut texts: Vec<String> = ids
-                        .iter()
-                        .filter_map(|id| self.data.get(*id).map(|item| item.text.clone()))
-                        .collect();
-                    texts.extend(
-                        category_names
-                            .iter()
-                            .map(|category| format!("[category] {category}")),
-                    );
                     if !ids.is_empty() || !category_names.is_empty() {
-                        self.mode = Mode::ConfirmDelete {
-                            ids,
-                            texts,
-                            category_names,
-                        };
+                        self.mode = self.build_confirm_delete_mode(ids, category_names);
                     }
                     return false;
                 }
@@ -1572,24 +1758,31 @@ impl App {
                 } = mode
                 {
                     match cmd {
+                        MultiSelectCmd::PickAction => {
+                            let ids: Vec<u64> = selected.into_iter().collect();
+                            let category_names: Vec<String> =
+                                selected_categories.into_iter().collect();
+                            if ids.is_empty() && category_names.is_empty() {
+                                self.mode = Mode::Normal;
+                                return false;
+                            }
+                            self.mode = Mode::BulkActionPicker {
+                                ids,
+                                category_names,
+                                selected: 0,
+                            };
+                            return false;
+                        }
                         MultiSelectCmd::Delete => {
-                            for id in &selected {
-                                self.data.delete(*id);
+                            let ids: Vec<u64> = selected.into_iter().collect();
+                            let category_names: Vec<String> =
+                                selected_categories.into_iter().collect();
+                            if ids.is_empty() && category_names.is_empty() {
+                                self.mode = Mode::Normal;
+                                return false;
                             }
-                            for category in &selected_categories {
-                                let ids: Vec<u64> = self
-                                    .data
-                                    .items()
-                                    .iter()
-                                    .filter(|i| category_matches(i.category.as_deref(), category))
-                                    .map(|i| i.id)
-                                    .collect();
-                                for id in ids {
-                                    self.data.delete(id);
-                                }
-                                self.data.remove_category(category);
-                            }
-                            self.mark_dirty();
+                            self.mode = self.build_confirm_delete_mode(ids, category_names);
+                            return false;
                         }
                         MultiSelectCmd::ToggleDone => {
                             for id in &selected {
@@ -1598,21 +1791,29 @@ impl App {
                             self.mark_dirty();
                         }
                         MultiSelectCmd::Archive => {
-                            for id in &selected {
+                            let item_ids: Vec<u64> = selected.iter().copied().collect();
+                            let category_names: Vec<String> =
+                                selected_categories.iter().cloned().collect();
+                            for id in &item_ids {
                                 self.data.set_archived(*id, true);
                             }
-                            for category in &selected_categories {
+                            for category in &category_names {
                                 self.data.set_category_archived(category, true);
                             }
+                            self.push_undo_archive(item_ids, category_names, false);
                             self.mark_dirty();
                         }
                         MultiSelectCmd::RestoreArchive => {
-                            for id in &selected {
+                            let item_ids: Vec<u64> = selected.iter().copied().collect();
+                            let category_names: Vec<String> =
+                                selected_categories.iter().cloned().collect();
+                            for id in &item_ids {
                                 self.data.set_archived(*id, false);
                             }
-                            for category in &selected_categories {
+                            for category in &category_names {
                                 self.data.set_category_archived(category, false);
                             }
+                            self.push_undo_archive(item_ids, category_names, true);
                             self.mark_dirty();
                         }
                     }
@@ -1656,12 +1857,33 @@ impl App {
                     ..
                 } = mode
                 {
-                    for id in ids {
+                    let mut all_ids: Vec<u64> = ids;
+                    let mut seen: HashSet<u64> = all_ids.iter().copied().collect();
+                    for name in &category_names {
+                        let cascaded: Vec<u64> = self
+                            .data
+                            .items()
+                            .iter()
+                            .filter(|item| category_matches(item.category.as_deref(), name))
+                            .map(|item| item.id)
+                            .collect();
+                        for id in cascaded {
+                            if seen.insert(id) {
+                                all_ids.push(id);
+                            }
+                        }
+                    }
+                    let snapshot: Vec<TodoItem> = all_ids
+                        .iter()
+                        .filter_map(|id| self.data.get(*id).cloned())
+                        .collect();
+                    for id in all_ids {
                         self.data.delete(id);
                     }
                     for name in category_names {
                         self.data.remove_category(&name);
                     }
+                    self.push_undo_delete(snapshot);
                     self.mark_dirty();
                 }
                 if let Some(ref cat) = self.category_filter {
@@ -1675,10 +1897,10 @@ impl App {
                         self.category_index = 0;
                     }
                 }
-                self.clamp_selection();
+                self.return_after_secondary_mode();
             }
             Action::ConfirmDeleteNo => {
-                self.mode = Mode::Normal;
+                self.return_after_secondary_mode();
             }
             Action::ConfirmDeleteArchive => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
@@ -1688,15 +1910,16 @@ impl App {
                     ..
                 } = mode
                 {
-                    for id in ids {
-                        self.data.set_archived(id, true);
+                    for id in &ids {
+                        self.data.set_archived(*id, true);
                     }
-                    for name in category_names {
-                        self.data.set_category_archived(&name, true);
+                    for name in &category_names {
+                        self.data.set_category_archived(name, true);
                     }
+                    self.push_undo_archive(ids, category_names, false);
                     self.mark_dirty();
                 }
-                self.clamp_selection();
+                self.return_after_secondary_mode();
             }
             Action::PrioritySelect(idx) => {
                 const PRIORITIES: [Option<Priority>; 5] = [
@@ -1759,28 +1982,13 @@ impl App {
                         return false;
                     }
                     1 => {
-                        let ids: Vec<u64> = self
-                            .data
-                            .items()
-                            .iter()
-                            .filter(|item| item.done && !item.archived)
-                            .map(|item| item.id)
-                            .collect();
-                        for id in ids {
-                            self.data.set_archived(id, true);
-                        }
-                        self.mark_dirty();
+                        self.archive_done_items();
                     }
                     2 => {
                         if self.pane == Pane::Categories {
                             self.set_current_category_archived(true);
                         } else {
-                            if let Some(id) =
-                                self.items().get(self.selected_index()).map(|item| item.id)
-                            {
-                                self.data.set_archived(id, true);
-                                self.mark_dirty();
-                            }
+                            self.archive_single_visible_item(true);
                         }
                     }
                     3 => {
@@ -1802,12 +2010,7 @@ impl App {
                         if self.pane == Pane::Categories {
                             self.set_current_category_archived(false);
                         } else {
-                            if let Some(id) =
-                                self.items().get(self.selected_index()).map(|item| item.id)
-                            {
-                                self.data.set_archived(id, false);
-                                self.mark_dirty();
-                            }
+                            self.archive_single_visible_item(false);
                         }
                     }
                     7 => {
@@ -1911,6 +2114,7 @@ impl App {
                             Mode::Command { selected: 0 }
                         }
                     }
+                    Mode::BulkActionPicker { .. } => Mode::Normal,
                     other => other,
                 };
             }
@@ -1933,6 +2137,10 @@ impl App {
                 let (edit_id, from_normal) = match &self.mode {
                     Mode::Editing { edit_id } => (*edit_id, false),
                     Mode::Normal => (self.items().get(self.selected_index()).map(|i| i.id), true),
+                    Mode::Searching => {
+                        self.saved_search = Some(self.input.text().to_string());
+                        (self.items().get(self.selected_index()).map(|i| i.id), true)
+                    }
                     _ => return false,
                 };
                 let saved_text = self.input.text().to_string();
@@ -2106,8 +2314,19 @@ impl App {
                             };
                             self.move_category_to(&old_category, destination);
                         }
+                        CategoryPickerTarget::AssignBulk(bulk_ids) => {
+                            let category = if idx == 0 {
+                                None
+                            } else {
+                                cats.get(idx - 1).cloned()
+                            };
+                            for id in bulk_ids {
+                                self.data.set_category(id, category.clone());
+                            }
+                            self.mark_dirty();
+                        }
                     }
-                    self.mode = Mode::Normal;
+                    self.return_after_secondary_mode();
                 } else {
                     self.set_category_index(idx);
                     self.pane = Pane::Items;
@@ -2142,28 +2361,10 @@ impl App {
                 }
             }
             Action::DeleteCategory(name) => {
-                let ids: Vec<u64> = self
-                    .data
-                    .items()
-                    .iter()
-                    .filter(|i| category_matches(i.category.as_deref(), &name))
-                    .map(|i| i.id)
-                    .collect();
-                let texts: Vec<String> = self
-                    .data
-                    .items()
-                    .iter()
-                    .filter(|i| category_matches(i.category.as_deref(), &name))
-                    .map(|i| i.text.clone())
-                    .collect();
-                self.mode = Mode::ConfirmDelete {
-                    ids,
-                    texts,
-                    category_names: vec![name],
-                };
+                self.mode = self.build_confirm_delete_mode(Vec::new(), vec![name]);
             }
             Action::CancelCategoryPicker => {
-                self.mode = Mode::Normal;
+                self.return_after_secondary_mode();
             }
             Action::AddCategoryChoice(choice) => {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
@@ -2236,8 +2437,7 @@ impl App {
                 let items = self.items();
                 let id = items.get(self.selected_index()).map(|i| i.id);
                 let Some(name) = normalize_category(&name) else {
-                    self.input.clear();
-                    self.mode = Mode::Normal;
+                    self.return_after_secondary_mode();
                     return false;
                 };
                 if let Some(id) = id {
@@ -2251,8 +2451,7 @@ impl App {
                 } else {
                     self.category_index = cats.len() + 1;
                 }
-                self.input.clear();
-                self.mode = Mode::Normal;
+                self.return_after_secondary_mode();
             }
             Action::SortSelect(idx) => {
                 if let Some(mode) = sort_by_index(idx) {
@@ -2276,6 +2475,92 @@ impl App {
             Action::CancelCategoryAdd => {
                 self.input.clear();
                 self.mode = Mode::Normal;
+            }
+            Action::Undo => {
+                if let Some(entry) = self.undo_stack.pop() {
+                    match entry {
+                        UndoEntry::Delete(items) => {
+                            for item in items {
+                                self.data.restore_item(item);
+                            }
+                        }
+                        UndoEntry::Archive {
+                            item_ids,
+                            category_names,
+                            previous_archived,
+                        } => {
+                            for id in item_ids {
+                                self.data.set_archived(id, previous_archived);
+                            }
+                            for name in category_names {
+                                self.data.set_category_archived(&name, previous_archived);
+                            }
+                        }
+                    }
+                    self.mark_dirty();
+                    self.clamp_selection();
+                }
+            }
+            Action::BulkActionSelect(idx) => {
+                let (ids, category_names) = match std::mem::replace(&mut self.mode, Mode::Normal) {
+                    Mode::BulkActionPicker {
+                        ids,
+                        category_names,
+                        ..
+                    } => (ids, category_names),
+                    other => {
+                        self.mode = other;
+                        return false;
+                    }
+                };
+
+                match idx {
+                    0 => {
+                        self.mode = self.build_confirm_delete_mode(ids, category_names);
+                    }
+                    1 => {
+                        for id in &ids {
+                            self.data.set_archived(*id, true);
+                        }
+                        for name in &category_names {
+                            self.data.set_category_archived(name, true);
+                        }
+                        self.push_undo_archive(ids, category_names, false);
+                        self.mark_dirty();
+                        self.return_after_secondary_mode();
+                    }
+                    2 => {
+                        for id in &ids {
+                            self.data.toggle_done(*id);
+                        }
+                        self.mark_dirty();
+                        self.return_after_secondary_mode();
+                    }
+                    3 => {
+                        if ids.is_empty() {
+                            return false;
+                        }
+                        self.input.clear();
+                        self.mode = Mode::CategoryPicker {
+                            selected: 0,
+                            target: CategoryPickerTarget::AssignBulk(ids),
+                        };
+                    }
+                    4 => {
+                        if ids.len() != 1 || !category_names.is_empty() {
+                            return false;
+                        }
+                        let id = ids[0];
+                        if let Some(item) = self.data.get(id) {
+                            self.input.set_text(&item.text);
+                            self.mode = Mode::Editing { edit_id: Some(id) };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Action::CancelBulkActionPicker => {
+                self.return_after_secondary_mode();
             }
             Action::Quit => return true,
         }
@@ -2321,9 +2606,18 @@ fn is_popup_list_mode(mode: &Mode) -> bool {
             | Mode::CategoryParentPicker { .. }
             | Mode::SortPicker { .. }
             | Mode::ArchivePicker { .. }
+            | Mode::BulkActionPicker { .. }
             | Mode::FilterPicker { .. }
             | Mode::DueDateFilterPicker { .. }
     )
+}
+
+pub(crate) fn bulk_action_labels(single_item: bool) -> Vec<&'static str> {
+    let mut labels = vec!["Delete", "Archive", "Toggle done", "Assign category"];
+    if single_item {
+        labels.push("Edit");
+    }
+    labels
 }
 
 #[cfg(test)]
