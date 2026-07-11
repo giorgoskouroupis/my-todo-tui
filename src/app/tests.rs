@@ -1112,14 +1112,14 @@ fn get_filtered_commands_shows_archive_subcommands_after_space() {
     assert_eq!(
         names,
         vec![
+            "archive one",
             "archive bulk",
             "archive done",
-            "archive one",
             "archive all",
-            "archive archived",
-            "archive restore bulk",
             "archive restore",
-            "archive restore all"
+            "archive restore bulk",
+            "archive restore all",
+            "archive archived"
         ]
     );
 }
@@ -1185,7 +1185,7 @@ fn resolve_command_input_preserves_argument_commands() {
 fn resolve_command_input_executes_selected_subcommand_after_space() {
     assert_eq!(
         resolve_command_input("archive ", 1),
-        Some("archive done".to_string())
+        Some("archive bulk".to_string())
     );
     assert_eq!(
         resolve_command_input("filter ", 4),
@@ -1373,7 +1373,11 @@ fn bulk_action_from_search_popup_returns_to_search_after_action() {
     app.handle_action(Action::ApplySearch);
     assert!(matches!(app.mode, Mode::BulkActionPicker { .. }));
 
-    app.handle_action(Action::BulkActionSelect(1));
+    let archive_idx = crate::app::bulk_action_labels(true)
+        .iter()
+        .position(|l| *l == "Archive")
+        .unwrap();
+    app.handle_action(Action::BulkActionSelect(archive_idx));
     assert!(app.data.get(a).unwrap().archived);
     assert!(matches!(app.mode, Mode::Searching));
     assert_eq!(app.input.text(), "alp");
@@ -1609,13 +1613,17 @@ fn bulk_action_delete_opens_confirm_delete_popup() {
     let mut data = TodoData::new();
     let a = data.add("a");
     let mut app = test_app(data);
+    let idx = crate::app::bulk_action_labels(true)
+        .iter()
+        .position(|l| *l == "Delete")
+        .unwrap();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a],
         category_names: Vec::new(),
-        selected: 0,
+        selected: idx,
     };
 
-    app.handle_action(Action::BulkActionSelect(0));
+    app.handle_action(Action::BulkActionSelect(idx));
 
     assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
 }
@@ -1626,13 +1634,17 @@ fn bulk_action_archive_archives_and_records_undo() {
     let a = data.add("a");
     let b = data.add("b");
     let mut app = test_app(data);
+    let idx = crate::app::bulk_action_labels(false)
+        .iter()
+        .position(|l| *l == "Archive")
+        .unwrap();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a, b],
         category_names: Vec::new(),
-        selected: 1,
+        selected: idx,
     };
 
-    app.handle_action(Action::BulkActionSelect(1));
+    app.handle_action(Action::BulkActionSelect(idx));
 
     assert!(app.data.get(a).unwrap().archived);
     assert!(app.data.get(b).unwrap().archived);
@@ -1647,13 +1659,17 @@ fn bulk_action_toggle_done_flips_done_flag() {
     let mut data = TodoData::new();
     let a = data.add("a");
     let mut app = test_app(data);
+    let idx = crate::app::bulk_action_labels(true)
+        .iter()
+        .position(|l| *l == "Toggle done")
+        .unwrap();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a],
         category_names: Vec::new(),
-        selected: 2,
+        selected: idx,
     };
 
-    app.handle_action(Action::BulkActionSelect(2));
+    app.handle_action(Action::BulkActionSelect(idx));
 
     assert!(app.data.get(a).unwrap().done);
 }
@@ -1673,13 +1689,17 @@ fn bulk_action_edit_opens_editing_mode_on_single_item() {
     let mut data = TodoData::new();
     let a = data.add("hello");
     let mut app = test_app(data);
+    let idx = crate::app::bulk_action_labels(true)
+        .iter()
+        .position(|l| *l == "Edit")
+        .unwrap();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a],
         category_names: Vec::new(),
-        selected: 4,
+        selected: idx,
     };
 
-    app.handle_action(Action::BulkActionSelect(4));
+    app.handle_action(Action::BulkActionSelect(idx));
 
     assert!(matches!(app.mode, Mode::Editing { edit_id: Some(id) } if id == a));
     assert_eq!(app.input.text(), "hello");
@@ -1691,13 +1711,14 @@ fn bulk_action_edit_is_no_op_with_multiple_ids() {
     let a = data.add("a");
     let b = data.add("b");
     let mut app = test_app(data);
+    let out_of_range = crate::app::bulk_action_labels(false).len();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a, b],
         category_names: Vec::new(),
-        selected: 4,
+        selected: 0,
     };
 
-    app.handle_action(Action::BulkActionSelect(4));
+    app.handle_action(Action::BulkActionSelect(out_of_range));
 
     assert!(matches!(app.mode, Mode::BulkActionPicker { .. }));
 }
@@ -1709,13 +1730,17 @@ fn bulk_action_move_opens_category_picker_with_bulk_target() {
     let b = data.add("b");
     data.add_category("Work");
     let mut app = test_app(data);
+    let idx = crate::app::bulk_action_labels(false)
+        .iter()
+        .position(|l| *l == "Assign category")
+        .unwrap();
     app.mode = Mode::BulkActionPicker {
         ids: vec![a, b],
         category_names: Vec::new(),
-        selected: 3,
+        selected: idx,
     };
 
-    app.handle_action(Action::BulkActionSelect(3));
+    app.handle_action(Action::BulkActionSelect(idx));
 
     match &app.mode {
         Mode::CategoryPicker {

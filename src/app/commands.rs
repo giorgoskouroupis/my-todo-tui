@@ -30,20 +30,20 @@ pub const COMMANDS: &[(&str, &str)] = &[
 
 const VISIBLE_COMMANDS: &[(&str, &str)] = &[
     ("archive", "Archive or restore items/categories"),
+    ("archive one", "Archive selected item/category"),
     ("archive bulk", "Bulk-select items/categories to archive"),
     ("archive done", "Archive completed items"),
-    ("archive one", "Archive selected item/category"),
     ("archive all", "Archive all visible items/categories"),
-    ("archive archived", "Toggle archived view"),
+    ("archive restore", "Restore selected archived item/category"),
     (
         "archive restore bulk",
         "Bulk-select archived items/categories to restore",
     ),
-    ("archive restore", "Restore selected archived item/category"),
     (
         "archive restore all",
         "Restore all visible archived items/categories",
     ),
+    ("archive archived", "Toggle archived view"),
     ("clear", "Clear completed items"),
     ("delete", "Bulk delete items/categories"),
     ("done", "Bulk toggle done"),

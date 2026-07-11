@@ -633,7 +633,7 @@ impl App {
             Mode::ThemePicker { .. } => Some(Theme::theme_names().len().saturating_sub(1)),
             Mode::PriorityPicker { .. } => Some(4),
             Mode::SortPicker { .. } => Some(2),
-            Mode::ArchivePicker { .. } => Some(7),
+            Mode::ArchivePicker { .. } => Some(archive_picker_labels().len().saturating_sub(1)),
             Mode::FilterPicker { .. } => Some(4),
             Mode::DueDateFilterPicker { .. } => Some(3),
             Mode::CategoryPicker { target, .. } => Some(match target {
@@ -1388,6 +1388,10 @@ impl App {
                 let cmd = parts[0].to_lowercase();
                 let arg = parts.get(1).map(|s| s.to_string());
 
+                if !matches!(cmd.as_str(), "search" | "s") {
+                    self.saved_search = None;
+                }
+
                 if arg.is_none() && has_visible_subcommands(&cmd) {
                     self.push_command_popup_back_target(&cmd);
                     self.input.set_text(&format!("{cmd} "));
@@ -1972,8 +1976,19 @@ impl App {
                 }
             }
             Action::ArchiveSelect(idx) => {
-                match idx {
-                    0 => {
+                let label = match archive_picker_labels().get(idx).copied() {
+                    Some(label) => label,
+                    None => return false,
+                };
+                match label {
+                    "Archive one" => {
+                        if self.pane == Pane::Categories {
+                            self.set_current_category_archived(true);
+                        } else {
+                            self.archive_single_visible_item(true);
+                        }
+                    }
+                    "Archive bulk" => {
                         self.mode = Mode::MultiSelect {
                             cmd: MultiSelectCmd::Archive,
                             selected: HashSet::new(),
@@ -1981,23 +1996,23 @@ impl App {
                         };
                         return false;
                     }
-                    1 => {
+                    "Archive done" => {
                         self.archive_done_items();
                     }
-                    2 => {
-                        if self.pane == Pane::Categories {
-                            self.set_current_category_archived(true);
-                        } else {
-                            self.archive_single_visible_item(true);
-                        }
-                    }
-                    3 => {
+                    "Archive all" => {
                         self.set_visible_archived(true);
                     }
-                    4 => {
+                    "Archived view" => {
                         self.show_archived = !self.show_archived;
                     }
-                    5 => {
+                    "Restore one" => {
+                        if self.pane == Pane::Categories {
+                            self.set_current_category_archived(false);
+                        } else {
+                            self.archive_single_visible_item(false);
+                        }
+                    }
+                    "Restore bulk" => {
                         self.show_archived = true;
                         self.mode = Mode::MultiSelect {
                             cmd: MultiSelectCmd::RestoreArchive,
@@ -2006,14 +2021,7 @@ impl App {
                         };
                         return false;
                     }
-                    6 => {
-                        if self.pane == Pane::Categories {
-                            self.set_current_category_archived(false);
-                        } else {
-                            self.archive_single_visible_item(false);
-                        }
-                    }
-                    7 => {
+                    "Restore all" => {
                         self.set_visible_archived(false);
                     }
                     _ => {}
@@ -2502,23 +2510,27 @@ impl App {
                 }
             }
             Action::BulkActionSelect(idx) => {
-                let (ids, category_names) = match std::mem::replace(&mut self.mode, Mode::Normal) {
-                    Mode::BulkActionPicker {
-                        ids,
-                        category_names,
-                        ..
-                    } => (ids, category_names),
-                    other => {
-                        self.mode = other;
-                        return false;
+                let single = match &self.mode {
+                    Mode::BulkActionPicker { ids, category_names, .. } => {
+                        ids.len() == 1 && category_names.is_empty()
                     }
+                    _ => return false,
+                };
+                let labels = bulk_action_labels(single);
+                let label = match labels.get(idx).copied() {
+                    Some(label) => label,
+                    None => return false,
+                };
+                let (ids, category_names) = match std::mem::replace(&mut self.mode, Mode::Normal) {
+                    Mode::BulkActionPicker { ids, category_names, .. } => (ids, category_names),
+                    _ => return false,
                 };
 
-                match idx {
-                    0 => {
+                match label {
+                    "Delete" => {
                         self.mode = self.build_confirm_delete_mode(ids, category_names);
                     }
-                    1 => {
+                    "Archive" => {
                         for id in &ids {
                             self.data.set_archived(*id, true);
                         }
@@ -2529,14 +2541,14 @@ impl App {
                         self.mark_dirty();
                         self.return_after_secondary_mode();
                     }
-                    2 => {
+                    "Toggle done" => {
                         for id in &ids {
                             self.data.toggle_done(*id);
                         }
                         self.mark_dirty();
                         self.return_after_secondary_mode();
                     }
-                    3 => {
+                    "Assign category" => {
                         if ids.is_empty() {
                             return false;
                         }
@@ -2546,8 +2558,8 @@ impl App {
                             target: CategoryPickerTarget::AssignBulk(ids),
                         };
                     }
-                    4 => {
-                        if ids.len() != 1 || !category_names.is_empty() {
+                    "Edit" => {
+                        if !single {
                             return false;
                         }
                         let id = ids[0];
@@ -2613,11 +2625,25 @@ fn is_popup_list_mode(mode: &Mode) -> bool {
 }
 
 pub(crate) fn bulk_action_labels(single_item: bool) -> Vec<&'static str> {
-    let mut labels = vec!["Delete", "Archive", "Toggle done", "Assign category"];
+    let mut labels = vec!["Archive", "Assign category", "Delete", "Toggle done"];
     if single_item {
         labels.push("Edit");
     }
+    labels.sort_unstable();
     labels
+}
+
+pub(crate) fn archive_picker_labels() -> &'static [&'static str] {
+    &[
+        "Archive one",
+        "Archive bulk",
+        "Archive done",
+        "Archive all",
+        "Restore one",
+        "Restore bulk",
+        "Restore all",
+        "Archived view",
+    ]
 }
 
 #[cfg(test)]

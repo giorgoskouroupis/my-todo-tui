@@ -610,7 +610,14 @@ fn render_cmd_completions(
         .max()
         .unwrap_or(18)
         .max(14);
-    let width = ((cmd_width + 48) as u16).min(area.width.saturating_sub(2));
+    let desc_width = matches
+        .iter()
+        .map(|(_, desc)| desc.chars().count())
+        .max()
+        .unwrap_or(0);
+    // Layout: "  " + prefix(1) + cmd(cmd_width) + " " + desc(desc_width) + "  " margin
+    let content_width = cmd_width + desc_width + 6;
+    let width = (content_width as u16).min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
@@ -708,7 +715,17 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, selected: usize, theme: &T
     let registry = Theme::theme_registry();
     let group_count = 2;
     let height = registry.len() as u16 + group_count + 2;
-    let width = 30u16.min(area.width.saturating_sub(2));
+    // Rows: "    " + circle(2) + name → 6 chars around the widest theme name.
+    let content_width = registry
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 8;
+    let title_width = " Themes ".chars().count() + 2;
+    let width = ((content_width.max(title_width)) as u16)
+        .max(30)
+        .min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
@@ -810,11 +827,22 @@ fn render_menu_popup(
     title: &str,
     items: &[&str],
     selected: usize,
-    width: u16,
+    min_width: u16,
     theme: &Theme,
 ) {
     let height = (items.len() as u16 + 2).min(area.height.saturating_sub(1));
-    let width = width.min(area.width.saturating_sub(2));
+    // Layout per row: "  " + label + "  " → 4 chars of margin around the widest label.
+    // Title also needs to fit inside the top border, so include its length.
+    let content_width = items
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 4;
+    let title_width = title.chars().count() + 2;
+    let width = (content_width.max(title_width) as u16)
+        .max(min_width)
+        .min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
     let popup_area = Rect::new(
@@ -880,16 +908,7 @@ fn render_archive_picker(frame: &mut Frame, area: Rect, selected: usize, theme: 
         frame,
         area,
         " Archive ",
-        &[
-            "Archive bulk",
-            "Archive done",
-            "Archive one",
-            "Archive all",
-            "Archived view",
-            "Restore bulk",
-            "Restore one",
-            "Restore all",
-        ],
+        crate::app::archive_picker_labels(),
         selected,
         24,
         theme,
@@ -956,7 +975,27 @@ fn render_category_picker(
     };
     let total = display_categories.len() + 1;
     let height = total as u16 + 2;
-    let width = 30;
+    let entries: [&str; 1] = [match target {
+        CategoryPickerTarget::AssignItem | CategoryPickerTarget::AssignBulk(_) => "None",
+        CategoryPickerTarget::MoveCategory(_) => "Root",
+    }];
+    let title_str = match target {
+        CategoryPickerTarget::AssignItem => " Assign Category ",
+        CategoryPickerTarget::AssignBulk(_) => " Assign Category (bulk) ",
+        CategoryPickerTarget::MoveCategory(_) => " Move Category ",
+    };
+    let content_width = entries
+        .iter()
+        .copied()
+        .chain(display_categories.iter().copied())
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 4;
+    let title_width = title_str.chars().count() + 2;
+    let width = ((content_width.max(title_width)) as u16)
+        .max(30)
+        .min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
@@ -968,10 +1007,6 @@ fn render_category_picker(
     );
 
     let mut lines = Vec::new();
-    let entries: [&str; 1] = [match target {
-        CategoryPickerTarget::AssignItem | CategoryPickerTarget::AssignBulk(_) => "None",
-        CategoryPickerTarget::MoveCategory(_) => "Root",
-    }];
     for (i, label) in entries
         .iter()
         .copied()
@@ -1011,11 +1046,7 @@ fn render_category_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
-        .title(match target {
-            CategoryPickerTarget::AssignItem => " Assign Category ",
-            CategoryPickerTarget::AssignBulk(_) => " Assign Category (bulk) ",
-            CategoryPickerTarget::MoveCategory(_) => " Move Category ",
-        })
+        .title(title_str)
         .title_style(
             Style::default()
                 .fg(theme.accent)
@@ -1040,7 +1071,17 @@ fn render_category_filter_picker(
 ) {
     let total = categories.len() + 1;
     let height = (total as u16 + 2).min(area.height.saturating_sub(1));
-    let width = 36u16.min(area.width.saturating_sub(2));
+    let title_str = " Filter Category ";
+    let content_width = std::iter::once("All")
+        .chain(categories.iter().map(|entry| entry.path.as_str()))
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 4;
+    let title_width = title_str.chars().count() + 2;
+    let width = ((content_width.max(title_width)) as u16)
+        .max(36)
+        .min(area.width.saturating_sub(2));
     let popup_y = area.bottom().saturating_sub(height + 1);
     let popup_x = area.x + 2;
 
@@ -1095,7 +1136,7 @@ fn render_category_filter_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_default))
-        .title(" Filter Category ")
+        .title(title_str)
         .title_style(
             Style::default()
                 .fg(theme.accent)
