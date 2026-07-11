@@ -30,6 +30,7 @@ fn test_app(data: TodoData) -> App {
         dirty: false,
         last_mutated: Instant::now(),
         pending_due_date: None,
+        sidebar_width: super::SIDEBAR_WIDTH_DEFAULT,
         category_selection_memory: HashMap::new(),
         popup_back_stack: Vec::new(),
         undo_stack: Vec::new(),

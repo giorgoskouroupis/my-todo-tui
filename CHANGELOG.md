@@ -1,3 +1,10 @@
+# v0.8.2 — Fix test build
+
+## Fixes
+- **Test suite compiles again.** `App` gained a `sidebar_width` field in v0.8.1 but the `test_app` helper in `src/app/tests.rs` was not updated, so `cargo test` (and `nix build`, which runs the check phase) failed. Runtime binary was unaffected.
+
+---
+
 # v0.8.1 — Resizable sidebar, Tab pane switch, popup wrapping
 
 ## New
