@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::app::NoteDisplay;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -9,6 +10,8 @@ pub struct Config {
     pub theme: Option<ThemeConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar_width: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_inline: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -194,6 +197,23 @@ pub fn save_sidebar_width(width: u16) {
         .and_then(|raw| serde_json::from_str::<Config>(&raw).ok())
         .unwrap_or_default();
     cfg.sidebar_width = Some(width);
+    write_config(&path, &cfg);
+}
+
+pub fn load_note_display() -> Option<NoteDisplay> {
+    let path = config_path();
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let cfg: Config = serde_json::from_str(&raw).ok()?;
+    cfg.notes_inline.as_deref().and_then(NoteDisplay::from_label)
+}
+
+pub fn save_note_display(display: NoteDisplay) {
+    let path = config_path();
+    let mut cfg = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Config>(&raw).ok())
+        .unwrap_or_default();
+    cfg.notes_inline = Some(display.label().to_string());
     write_config(&path, &cfg);
 }
 

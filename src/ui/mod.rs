@@ -5,7 +5,9 @@ pub mod theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListState, Paragraph};
 
-use crate::app::{get_filtered_commands, CategoryPickerTarget, DueFilter, Mode, Pane, SortMode};
+use crate::app::{
+    get_filtered_commands, CategoryPickerTarget, DueFilter, Mode, NoteDisplay, Pane, SortMode,
+};
 use crate::data::{CategoryEntry, Priority, TodoItem};
 use crate::date::{self, Date};
 
@@ -30,6 +32,7 @@ pub struct RenderState<'a> {
     pub sort_mode: &'a SortMode,
     pub sidebar_width: u16,
     pub note_hint: bool,
+    pub note_display: NoteDisplay,
 }
 
 pub fn render(frame: &mut Frame, state: RenderState<'_>) {
@@ -192,7 +195,12 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
             );
         }
         let anchor = if *from_normal {
-            calendar_item_anchor(h_layout[1], state.items, state.selected_index)
+            calendar_item_anchor(
+                h_layout[1],
+                state.items,
+                state.selected_index,
+                state.note_display,
+            )
         } else {
             calendar_prompt_anchor(layout[2])
         };
@@ -297,12 +305,18 @@ fn calendar_prompt_anchor(input_area: Rect) -> Rect {
     )
 }
 
-fn calendar_item_anchor(list_area: Rect, items: &[TodoItem], selected_index: usize) -> Rect {
+fn calendar_item_anchor(
+    list_area: Rect,
+    items: &[TodoItem],
+    selected_index: usize,
+    note_display: NoteDisplay,
+) -> Rect {
     let content_width = list_area.width.saturating_sub(5) as usize;
     let mut y = list_area.y;
     for item in items.iter().take(selected_index) {
         let text_lines = wrap_text(&item.text, content_width.max(10)).len() as u16;
-        y = y.saturating_add(1 + text_lines);
+        let note_lines = self::list::note_row_count(item, content_width, note_display) as u16;
+        y = y.saturating_add(1 + text_lines + note_lines);
         if y >= list_area.bottom().saturating_sub(1) {
             break;
         }
@@ -372,6 +386,15 @@ fn render_header(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: 
                 Style::default().fg(theme.warning),
             ));
         }
+    }
+
+    // All is the default, so only call out the states that hide something.
+    if !matches!(state.note_display, NoteDisplay::All) {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[notes: {}]", state.note_display.label()),
+            Style::default().fg(theme.warning),
+        ));
     }
 
     match state.sort_mode {
@@ -574,6 +597,7 @@ fn render_list(frame: &mut Frame, area: Rect, state: &RenderState<'_>, theme: &T
                 text_width,
                 state.filter,
                 category_filter,
+                state.note_display,
             )
         })
         .collect();
@@ -1400,6 +1424,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         Entry::Text("/archive        — archive items/categories (done, all, restore)".into(), primary, "  "),
         Entry::Text("/move           — move item or highlighted category".into(), primary, "  "),
         Entry::Text("/notes          — note log for the current item (Ctrl+N)".into(), primary, "  "),
+        Entry::Text("/notes latest|all|hidden — inline notes (Ctrl+L)".into(), primary, "  "),
         Entry::Text("/rename         — rename current item/category".into(), primary, "  "),
         Entry::Text("/sidebar        — resize sidebar (Left/Right, Enter save)".into(), primary, "  "),
         Entry::Text("/themes         — pick a theme".into(), primary, "  "),
@@ -1497,11 +1522,12 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Space", "Toggle doing", false),
         ("Delete", "Delete", false),
         ("Ctrl+E", "Edit", false),
-        ("Ctrl+P/S-P", "Priority", false),
+        ("Ctrl+P", "Priority", false),
         ("Ctrl+↑/↓", "Reorder", false),
         ("Ctrl+O", "Assign cat", false),
         ("Ctrl+D", "Due date", false),
         ("Ctrl+N", "Notes", false),
+        ("Ctrl+L", "Inline notes", false),
         ("*", "Pin", false),
         ("←/→", "Switch pane", false),
         ("Tab", "Switch pane", false),
@@ -1759,9 +1785,8 @@ fn render_notes_popup(
     let available = area.width.saturating_sub(4) as usize;
     let text_width = available.saturating_sub(text_offset).clamp(12, 72);
 
-    let mut groups: Vec<(bool, Vec<NoteRow>)> = item
-        .notes
-        .iter()
+    // Same newest-first order as the inline list, so row 0 is the newest entry.
+    let mut groups: Vec<(bool, Vec<NoteRow>)> = self::list::notes_newest_first(item)
         .enumerate()
         .map(|(i, note)| {
             let rows: Vec<NoteRow> = wrap_text(&note.text, text_width)

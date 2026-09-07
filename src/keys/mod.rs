@@ -101,11 +101,8 @@ pub fn handle_normal(key: KeyEvent, items: &[TodoItem], selected_index: usize) -
                     Some(Action::StartNewItem)
                 };
             }
-            KeyCode::Char('p') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                return selected_id.map(|id| Action::CyclePriority(id, true));
-            }
-            KeyCode::Char('P') | KeyCode::Char('p') => {
-                return selected_id.map(|id| Action::CyclePriority(id, false));
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                return selected_id.map(Action::CyclePriority);
             }
             KeyCode::Char('*') => {
                 return selected_id.map(Action::TogglePin);

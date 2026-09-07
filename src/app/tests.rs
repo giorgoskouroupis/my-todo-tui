@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use super::{
     get_completions, get_filtered_commands, resolve_command_input, theme_index_by_name, Action,
-    App, CategoryPickerTarget, Mode, MultiSelectCmd, Pane, RenameTarget, SortMode,
+    App, CategoryPickerTarget, Mode, MultiSelectCmd, NoteDisplay, Pane, RenameTarget, SortMode,
 };
 use crate::data::TodoData;
 use crate::ui::input::InputBuffer;
@@ -32,6 +32,7 @@ fn test_app(data: TodoData) -> App {
         pending_due_date: None,
         sidebar_width: super::SIDEBAR_WIDTH_DEFAULT,
         note_hint: false,
+        note_display: NoteDisplay::default(),
         category_selection_memory: HashMap::new(),
         popup_back_stack: Vec::new(),
         undo_stack: Vec::new(),
@@ -1354,7 +1355,7 @@ fn ctrl_p_in_search_mode_cycles_priority_on_highlighted_item() {
 
     app.mode = Mode::Searching;
     let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-    assert!(matches!(action, Some(Action::CyclePriority(item_id, true)) if item_id == id));
+    assert!(matches!(action, Some(Action::CyclePriority(item_id)) if item_id == id));
     app.handle_action(action.unwrap());
 
     assert_ne!(app.data.get(id).unwrap().priority, before);
@@ -1911,10 +1912,10 @@ fn editing_a_note_replaces_only_that_entry() {
     let mut app = test_app(data);
 
     app.handle_action(Action::OpenNotes(id));
-    // Opens on the newest entry.
-    assert!(matches!(app.mode, Mode::Notes { selected: 1, .. }));
-    app.handle_action(Action::SelectPrev);
+    // Newest first, so the newest entry is row 0 and older ones are below it.
     assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+    app.handle_action(Action::SelectNext);
+    assert!(matches!(app.mode, Mode::Notes { selected: 1, .. }));
 
     app.handle_action(Action::StartNoteEdit);
     assert_eq!(app.input.text(), "first");
@@ -1924,7 +1925,7 @@ fn editing_a_note_replaces_only_that_entry() {
     let notes = &app.data.get(id).unwrap().notes;
     assert_eq!(notes[0].text, "first, corrected");
     assert_eq!(notes[1].text, "second");
-    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+    assert!(matches!(app.mode, Mode::Notes { selected: 1, .. }));
 }
 
 #[test]
@@ -1954,7 +1955,8 @@ fn ctrl_z_restores_a_deleted_note_in_place() {
     let mut app = test_app(data);
 
     app.handle_action(Action::OpenNotes(id));
-    app.handle_action(Action::SelectPrev);
+    // Row 0 is "third"; step down one to reach "second".
+    app.handle_action(Action::SelectNext);
     app.handle_action(Action::DeleteNote);
     let texts: Vec<&str> = app
         .data
@@ -2075,4 +2077,158 @@ fn marking_an_item_done_hints_at_logging_the_outcome() {
     app.handle_action(Action::ToggleDone(id));
     app.handle_action(Action::ToggleDone(id));
     assert!(!app.note_hint);
+}
+
+// Note: the CycleNoteDisplay / "notes <label>" handlers persist to config.json,
+// so these cover the key mapping and the cycle itself rather than running the
+// handler, keeping the suite from writing to the real user config.
+#[test]
+fn ctrl_l_maps_to_the_inline_note_toggle() {
+    let mut data = TodoData::new();
+    data.add("item");
+    let mut app = test_app(data);
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::CycleNoteDisplay)));
+}
+
+#[test]
+fn ctrl_shift_n_is_not_used_because_legacy_encoding_hides_shift() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    // Terminals without the kitty keyboard protocol send Ctrl+Shift+N as plain
+    // Ctrl+N, so the toggle must not live there: this has to stay the log.
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::OpenNotes(target)) if target == id));
+
+    // And where Shift *is* reported, Ctrl+Shift+N still opens the log rather
+    // than doing something different from the same physical chord elsewhere.
+    let action = app.dispatch_key(KeyEvent::new(
+        KeyCode::Char('n'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert!(matches!(action, Some(Action::OpenNotes(target)) if target == id));
+}
+
+#[test]
+fn note_display_defaults_to_all_and_steps_down() {
+    assert_eq!(NoteDisplay::default(), NoteDisplay::All);
+    assert_eq!(NoteDisplay::All.next(), NoteDisplay::Latest);
+    assert_eq!(NoteDisplay::Latest.next(), NoteDisplay::Hidden);
+    assert_eq!(NoteDisplay::Hidden.next(), NoteDisplay::All);
+}
+
+#[test]
+fn ctrl_n_still_opens_the_log_and_is_not_shadowed_by_the_toggle() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::OpenNotes(target)) if target == id));
+}
+
+#[test]
+fn notes_subcommand_arg_selects_display_versus_opening_the_log() {
+    // This label lookup is what routes `/notes <arg>`: a display mode sets the
+    // inline mode, anything else (including `open`) falls through to the log.
+    assert_eq!(NoteDisplay::from_label("all"), Some(NoteDisplay::All));
+    assert_eq!(NoteDisplay::from_label("hidden"), Some(NoteDisplay::Hidden));
+    assert_eq!(NoteDisplay::from_label("latest"), Some(NoteDisplay::Latest));
+    assert_eq!(NoteDisplay::from_label("open"), None);
+}
+
+#[test]
+fn notes_with_an_unrecognized_arg_opens_the_log() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ExecuteCommand("notes open".to_string()));
+    assert!(matches!(app.mode, Mode::Notes { item_id, .. } if item_id == id));
+    // An unrecognized arg must not be mistaken for a display mode.
+    assert_eq!(app.note_display, NoteDisplay::default());
+}
+
+#[test]
+fn bare_notes_command_opens_the_log_without_a_submenu() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ExecuteCommand("notes".to_string()));
+    assert!(matches!(app.mode, Mode::Notes { item_id, .. } if item_id == id));
+
+    // The display modes stay reachable as typed args even though they are not
+    // advertised in the palette, the way `/due today` is.
+    assert_eq!(
+        resolve_command_input("notes all", 0).as_deref(),
+        Some("notes all")
+    );
+    assert!(!get_filtered_commands("notes ")
+        .iter()
+        .any(|(name, _)| name.starts_with("notes ")));
+}
+
+#[test]
+fn note_display_labels_round_trip() {
+    for display in [NoteDisplay::Hidden, NoteDisplay::Latest, NoteDisplay::All] {
+        assert_eq!(NoteDisplay::from_label(display.label()), Some(display));
+    }
+    assert_eq!(NoteDisplay::from_label("open"), None);
+    assert_eq!(NoteDisplay::from_label(""), None);
+}
+
+#[test]
+fn note_index_flip_is_its_own_inverse() {
+    use super::note_index_flip;
+
+    // 3 entries: row 0 is the newest (stored last).
+    assert_eq!(note_index_flip(3, 0), Some(2));
+    assert_eq!(note_index_flip(3, 2), Some(0));
+    assert_eq!(note_index_flip(3, 1), Some(1));
+    for i in 0..3 {
+        assert_eq!(note_index_flip(3, note_index_flip(3, i).unwrap()), Some(i));
+    }
+
+    // Out of range, and the empty log.
+    assert_eq!(note_index_flip(3, 3), None);
+    assert_eq!(note_index_flip(0, 0), None);
+}
+
+#[test]
+fn note_rows_address_entries_newest_first() {
+    let mut data = TodoData::new();
+    let id = data.add("call for a rdv");
+    data.add_note(id, "oldest");
+    data.add_note(id, "middle");
+    data.add_note(id, "newest");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+
+    // Each row edits the entry it visually points at.
+    for (row, expected) in [(0, "newest"), (1, "middle"), (2, "oldest")] {
+        app.mode = Mode::Notes {
+            item_id: id,
+            selected: row,
+        };
+        app.handle_action(Action::StartNoteEdit);
+        assert_eq!(app.input.text(), expected, "row {row}");
+        app.handle_action(Action::CancelNote);
+    }
+
+    // Storage stays append-only chronological regardless of display order.
+    let stored: Vec<&str> = app
+        .data
+        .get(id)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|note| note.text.as_str())
+        .collect();
+    assert_eq!(stored, vec!["oldest", "middle", "newest"]);
 }

@@ -24,7 +24,8 @@ use commands::{
 };
 use defs::PopupBackTarget;
 pub use defs::{
-    Action, CategoryPickerTarget, DueFilter, Mode, MultiSelectCmd, Pane, RenameTarget, SortMode,
+    Action, CategoryPickerTarget, DueFilter, Mode, MultiSelectCmd, NoteDisplay, Pane, RenameTarget,
+    SortMode,
 };
 
 pub struct App {
@@ -48,6 +49,7 @@ pub struct App {
     pub pending_due_date: Option<String>,
     pub sidebar_width: u16,
     pub note_hint: bool,
+    pub note_display: NoteDisplay,
     category_selection_memory: HashMap<String, usize>,
     popup_back_stack: Vec<PopupBackTarget>,
     undo_stack: Vec<UndoEntry>,
@@ -102,6 +104,7 @@ impl App {
             pending_due_date: None,
             sidebar_width,
             note_hint: false,
+            note_display: config::load_note_display().unwrap_or_default(),
             category_selection_memory: HashMap::new(),
             popup_back_stack: Vec::new(),
             undo_stack: Vec::new(),
@@ -639,18 +642,24 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    /// Opens the note log for `id` with the newest entry highlighted, since that
-    /// is the one you just wrote or came back to read.
+    /// Opens the note log for `id`. Row 0 is the newest entry, so that is where
+    /// the highlight lands.
     fn open_notes(&mut self, id: u64) {
         if self.data.get(id).is_none() {
             return;
         }
-        let selected = self.data.last_note_index(id);
         self.input.clear();
         self.mode = Mode::Notes {
             item_id: id,
-            selected,
+            selected: 0,
         };
+    }
+
+    /// Maps a highlighted row to the entry it points at. Notes are stored
+    /// oldest-first (append-only) but shown newest-first, so the two indices are
+    /// mirror images; this is the only place that arithmetic lives.
+    fn note_storage_index(&self, item_id: u64, row: usize) -> Option<usize> {
+        note_index_flip(self.data.note_count(item_id), row)
     }
 
     fn mode_selection_max(&self) -> Option<usize> {
@@ -752,6 +761,7 @@ impl App {
                         sort_mode: &app.sort_mode,
                         sidebar_width: app.sidebar_width,
                         note_hint: app.note_hint,
+                        note_display: app.note_display,
                     },
                 )
             })?;
@@ -836,6 +846,15 @@ impl App {
         {
             return Some(Action::SetDueDate);
         }
+        // Single modifier on purpose: we run with legacy key encoding (see
+        // PopKeyboardEnhancementFlags in lib.rs), where Ctrl+Shift+<letter> is
+        // the same byte as Ctrl+<letter> and cannot be told apart.
+        if key.code == KeyCode::Char('l')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(&self.mode, Mode::Normal | Mode::Searching)
+        {
+            return Some(Action::CycleNoteDisplay);
+        }
         if key.code == KeyCode::Char('n')
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(&self.mode, Mode::Normal | Mode::Searching)
@@ -902,11 +921,8 @@ impl App {
             let selected_id = items.get(self.selected_index()).map(|item| item.id);
             if let Some(id) = selected_id {
                 match key.code {
-                    KeyCode::Char('p') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                        return Some(Action::CyclePriority(id, true));
-                    }
-                    KeyCode::Char('P') | KeyCode::Char('p') => {
-                        return Some(Action::CyclePriority(id, false));
+                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                        return Some(Action::CyclePriority(id));
                     }
                     KeyCode::Up => return Some(Action::Reorder(id, -1)),
                     KeyCode::Down => return Some(Action::Reorder(id, 1)),
@@ -1389,8 +1405,8 @@ impl App {
                     };
                 }
             }
-            Action::CyclePriority(id, forward) => {
-                self.data.cycle_priority(id, forward);
+            Action::CyclePriority(id) => {
+                self.data.cycle_priority(id);
                 self.mark_dirty();
                 let new_idx = self.items().iter().position(|i| i.id == id);
                 if let Some(pos) = new_idx {
@@ -1721,17 +1737,22 @@ impl App {
                             };
                         }
                     }
-                    "notes" | "n" => {
-                        let id = if self.pane == Pane::Items {
-                            self.items().get(self.selected_index()).map(|item| item.id)
-                        } else {
-                            None
-                        };
-                        match id {
-                            Some(id) => self.open_notes(id),
-                            None => self.mode = Mode::Normal,
+                    "notes" | "n" => match arg.as_deref().and_then(NoteDisplay::from_label) {
+                        Some(display) => {
+                            self.handle_action(Action::SetNoteDisplay(display));
                         }
-                    }
+                        None => {
+                            let id = if self.pane == Pane::Items {
+                                self.items().get(self.selected_index()).map(|item| item.id)
+                            } else {
+                                None
+                            };
+                            match id {
+                                Some(id) => self.open_notes(id),
+                                None => self.mode = Mode::Normal,
+                            }
+                        }
+                    },
                     "themes" => {
                         self.push_command_popup_back_target(&cmd);
                         self.mode = Mode::ThemePicker {
@@ -2614,13 +2635,12 @@ impl App {
                             note,
                         } => {
                             self.data.restore_note(item_id, index, note);
-                            if let Mode::Notes {
-                                item_id: open_id,
-                                selected,
-                            } = &mut self.mode
+                            let row = note_index_flip(self.data.note_count(item_id), index);
+                            if let (Some(row), Mode::Notes { item_id: open_id, selected }) =
+                                (row, &mut self.mode)
                             {
                                 if *open_id == item_id {
-                                    *selected = index;
+                                    *selected = row;
                                 }
                             }
                         }
@@ -2707,6 +2727,17 @@ impl App {
                 self.input.clear();
                 self.return_after_secondary_mode();
             }
+            Action::CycleNoteDisplay => {
+                self.note_display = self.note_display.next();
+                config::save_note_display(self.note_display);
+            }
+            Action::SetNoteDisplay(display) => {
+                if display != self.note_display {
+                    self.note_display = display;
+                    config::save_note_display(display);
+                }
+                self.mode = Mode::Normal;
+            }
             Action::StartNoteAppend => {
                 let Mode::Notes { item_id, .. } = &self.mode else {
                     return false;
@@ -2736,9 +2767,8 @@ impl App {
                 };
                 let (item_id, selected) = (*item_id, *selected);
                 let Some(text) = self
-                    .data
-                    .get(item_id)
-                    .and_then(|item| item.notes.get(selected))
+                    .note_storage_index(item_id, selected)
+                    .and_then(|index| self.data.get(item_id)?.notes.get(index))
                     .map(|note| note.text.clone())
                 else {
                     return false;
@@ -2761,17 +2791,20 @@ impl App {
                 let text = self.input.text().trim().to_string();
 
                 let selected = match edit_index {
-                    Some(index) => {
-                        if self.data.update_note(item_id, index, &text) {
-                            self.mark_dirty();
+                    Some(row) => {
+                        if let Some(index) = self.note_storage_index(item_id, row) {
+                            if self.data.update_note(item_id, index, &text) {
+                                self.mark_dirty();
+                            }
                         }
-                        index
+                        row
                     }
                     None => {
                         if self.data.add_note(item_id, &text) {
                             self.mark_dirty();
                         }
-                        self.data.last_note_index(item_id)
+                        // The new entry is the newest, so it is the top row.
+                        0
                     }
                 };
 
@@ -2787,7 +2820,7 @@ impl App {
                     return false;
                 };
                 let (item_id, edit_index) = (*item_id, *edit_index);
-                let selected = edit_index.unwrap_or_else(|| self.data.last_note_index(item_id));
+                let selected = edit_index.unwrap_or(0);
                 self.input.clear();
                 self.mode = Mode::Notes { item_id, selected };
             }
@@ -2796,10 +2829,13 @@ impl App {
                     return false;
                 };
                 let (item_id, selected) = (*item_id, *selected);
-                if let Some(note) = self.data.delete_note(item_id, selected) {
+                let Some(index) = self.note_storage_index(item_id, selected) else {
+                    return false;
+                };
+                if let Some(note) = self.data.delete_note(item_id, index) {
                     self.push_undo(UndoEntry::NoteDelete {
                         item_id,
-                        index: selected,
+                        index,
                         note,
                     });
                     self.mark_dirty();
@@ -2815,9 +2851,8 @@ impl App {
                     return false;
                 };
                 let text = self
-                    .data
-                    .get(*item_id)
-                    .and_then(|item| item.notes.get(*selected))
+                    .note_storage_index(*item_id, *selected)
+                    .and_then(|index| self.data.get(*item_id)?.notes.get(index))
                     .map(|note| note.text.clone());
                 if let Some(text) = text {
                     if let Ok(mut cb) = arboard::Clipboard::new() {
@@ -2868,6 +2903,12 @@ impl App {
 
         false
     }
+}
+
+/// Converts between the stored (oldest-first) and displayed (newest-first) note
+/// index. The mapping is its own inverse. `None` when the index has no entry.
+fn note_index_flip(count: usize, index: usize) -> Option<usize> {
+    count.checked_sub(1)?.checked_sub(index)
 }
 
 fn theme_index_by_name(name: &str) -> usize {

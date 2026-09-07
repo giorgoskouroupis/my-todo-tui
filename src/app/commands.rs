@@ -17,6 +17,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("m", "Alias for move"),
     ("notes", "Notes on the selected item"),
     ("n", "Alias for notes"),
+    // `/notes hidden|latest|all` set the inline display; kept out of
+    // VISIBLE_COMMANDS so `/notes` + Enter opens the log in one step, the way
+    // `/due today` works.
     ("priorities", "Filter by priority"),
     ("p", "Alias for priorities"),
     ("rename", "Rename category path"),

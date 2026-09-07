@@ -111,7 +111,7 @@ cargo deb
 | `Space` | Toggle doing |
 | `Ctrl+E` | Edit selected item, or create one if the list is empty |
 | `Delete` | Confirm-delete selected item |
-| `Ctrl+P` / `Ctrl+Shift+P` | Cycle priority forward/backward |
+| `Ctrl+P` | Cycle priority |
 | `Ctrl+Up` / `Ctrl+Down` | Reorder item |
 | `*` / `Ctrl+*` | Toggle pin |
 | `Left` / `Right` / `Tab` | Switch between items and category sidebar |
@@ -119,6 +119,7 @@ cargo deb
 | `Ctrl+O` | Assign category to selected item |
 | `Ctrl+D` | Open due-date calendar |
 | `Ctrl+N` | Open the note log for the selected item |
+| `Ctrl+L` | Cycle inline notes: all → newest → hidden |
 | `Ctrl+B` | Resize sidebar (`←/→` ±1, `Shift+←/→` ±5, `r` reset, `Enter` save, `Esc` cancel) |
 | `/` | Command mode |
 | `Ctrl+Z` | Undo last delete or archive (up to 20 levels) |
@@ -130,7 +131,7 @@ Any other printable character in the items pane starts a new todo prefilled with
 
 Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/reset`, `/notes`, `/themes`, `/sort`, `/sidebar`, `/help`, and `/keybindings`, plus unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. `/select` toggles into a generic bulk-select mode: `Space` toggles items/categories, `Ctrl+A` selects all, and `Enter` opens an action popup (`Delete`, `Archive`, `Toggle done`, `Assign category`, plus `Edit` when the selection is a single item) applied to the whole selection.
 
-`/search` types-to-filter live. `↑`/`↓` navigate the filtered list. Item shortcuts work on the highlighted result while typing: `Ctrl+P` / `Ctrl+Shift+P` cycle priority, `Ctrl+↑/↓` reorder, `Ctrl+*` toggle pin, `Ctrl+D` opens the due-date calendar, `Ctrl+E` edits the item, `Ctrl+O` assigns a category. `Enter` opens the same action popup as `/select` but on the single highlighted item (or press `Tab` first to promote into bulk-select mode on the currently filtered list, where `Space` toggles multiple items). All these round-trip back to the search prompt when the target flow finishes, so the query you were building is never lost. `Esc` clears the filter.
+`/search` types-to-filter live. `↑`/`↓` navigate the filtered list. Item shortcuts work on the highlighted result while typing: `Ctrl+P` cycles priority, `Ctrl+↑/↓` reorder, `Ctrl+*` toggle pin, `Ctrl+D` opens the due-date calendar, `Ctrl+E` edits the item, `Ctrl+O` assigns a category. `Enter` opens the same action popup as `/select` but on the single highlighted item (or press `Tab` first to promote into bulk-select mode on the currently filtered list, where `Space` toggles multiple items). All these round-trip back to the search prompt when the target flow finishes, so the query you were building is never lost. `Esc` clears the filter.
 
 `/themes` shows themes grouped by `Light` and `Dark`. Light: `catppuccin-latte`, `gruvbox-light`, `one-light`, `solarized-light`. Dark: `catppuccin-mocha`, `dracula`, `gruvbox`, `nord`, `one-dark`. Type a command prefix to filter the popup, press `Tab` to autocomplete the highlighted command or subcommand, and press `Enter` to execute it. `/filter category` filters the visible list; `/filter clear` and `/reset` clear filters and restore the default view. `Ctrl+O` assigns/moves the selected item. `/move` assigns the selected item in the items pane, or moves the highlighted category branch in the sidebar. `/archive one` archives the current item in the items pane or the highlighted category branch in the sidebar; from `All`, `/archive one` archives all visible items and categories. `/archive bulk` bulk-selects items or categories based on the active pane, `/archive restore bulk` restores archived items or categories, and `/archive archived` toggles archived view. `/archived` and `/unarchive` remain hidden aliases. `/rename` edits the selected item in the items pane or the highlighted category in the sidebar; `/rename old new` remains available for direct category-path renames. In `/delete`, `Ctrl+A` opens a confirmation popup for all current delete targets. In the items pane it deletes visible items only and keeps category names; in the category pane it deletes all items and all category names.
 
@@ -153,6 +154,22 @@ Each item carries a note log: an append-only list of dated one-line entries, for
 | `Ctrl+Y` | Copy the highlighted entry to the system clipboard |
 | `Ctrl+Z` | Undo the last deletion (restored at its original position) |
 | `Esc` | Close |
+
+Notes also show inline in the list, under the item text they belong to. `Ctrl+L` (or `/notes latest`, `/notes all`, `/notes hidden`) cycles between three modes:
+
+```text
+all (default)                       latest                              hidden
+- ◆ 📅 2026-09-15  📝 3   [Work]     - ◆ 📅 2026-09-15  📝 3   [Work]     - ◆ 📅 2026-09-15  📝 3   [Work]
+  call the doctor for a rdv           call the doctor for a rdv           call the doctor for a rdv
+  │ 2026-09-15  rdv 10h30, bring      │ 2026-09-15  rdv 10h30, br…
+  │             the x-ray
+  │ 2026-09-07  line busy
+  │ 2026-09-05  no answer
+```
+
+Entries list **newest first**, both inline and in the popup, so the current state of a task is the line nearest its title and the highlight opens on the entry you most likely want. The stored order in `todos.json` stays chronological — only the display is reversed.
+
+`all` is the default and wraps every entry. `latest` keeps one line per item, cut at a word boundary with `…` when there is more to read. `hidden` leaves only the counter, for when the list gets dense. `Ctrl+L` steps down through them in that order, so one press from the default shows less rather than nothing. The choice is saved to `config.json` as `notes_inline`, and the header shows `[notes: latest]` / `[notes: hidden]` when you are not on the default. The three `/notes` arguments work when typed but are not listed in the command palette, so `/notes` + `Enter` still opens the log in one step.
 
 Entries are stamped with the date they were written and capped at 500 characters. Items with notes show a `📝 n` counter on their status row. Marking an item done shows a one-off reminder in the prompt bar when it has no notes yet — the moment you finish something is usually when you have the outcome in hand. Notes ride along with the item everywhere: archive, delete + `Ctrl+Z`, category moves, and rename all preserve them, and existing `todos.json` files load unchanged (items without notes simply start empty).
 

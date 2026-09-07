@@ -34,15 +34,6 @@ impl Priority {
             Self::Urgent => Self::Low,
         }
     }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Low => Self::Urgent,
-            Self::Normal => Self::Low,
-            Self::High => Self::Normal,
-            Self::Urgent => Self::High,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,13 +395,9 @@ impl TodoData {
         changed
     }
 
-    pub fn cycle_priority(&mut self, id: u64, forward: bool) {
+    pub fn cycle_priority(&mut self, id: u64) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
-            item.priority = if forward {
-                item.priority.next()
-            } else {
-                item.priority.prev()
-            };
+            item.priority = item.priority.next();
         }
     }
 

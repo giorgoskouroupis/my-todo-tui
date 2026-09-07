@@ -10,6 +10,48 @@ pub enum SortMode {
     DueDate,
 }
 
+/// How much of an item's note log is shown inline in the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NoteDisplay {
+    /// Only the `📝 n` counter on the status row.
+    Hidden,
+    /// The newest entry, truncated to a single line.
+    Latest,
+    /// Every entry, wrapped. The default: notes exist to be read, and an item
+    /// realistically carries a handful, not dozens.
+    #[default]
+    All,
+}
+
+impl NoteDisplay {
+    /// Steps down in verbosity, so one press from the default shows less
+    /// rather than nothing.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Latest,
+            Self::Latest => Self::Hidden,
+            Self::Hidden => Self::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Latest => "latest",
+            Self::All => "all",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "hidden" => Some(Self::Hidden),
+            "latest" => Some(Self::Latest),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DueFilter {
     Today,
@@ -167,7 +209,7 @@ pub enum Action {
     ToggleDone(u64),
     ToggleDoing(u64),
     DeleteItem(u64),
-    CyclePriority(u64, bool),
+    CyclePriority(u64),
     Reorder(u64, i32),
     ReorderCategory(String, i32),
     ApplySearch,
@@ -231,6 +273,8 @@ pub enum Action {
     Quit,
     OpenNotes(u64),
     CloseNotes,
+    CycleNoteDisplay,
+    SetNoteDisplay(NoteDisplay),
     StartNoteAppend,
     StartNoteAppendWithChar(char),
     StartNoteEdit,
