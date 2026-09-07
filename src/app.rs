@@ -11,7 +11,7 @@ use std::io::{self, Stdout};
 
 use crate::config;
 use crate::data::{
-    category_matches, normalize_category, CategoryEntry, Priority, TodoData, TodoItem,
+    category_matches, normalize_category, CategoryEntry, Note, Priority, TodoData, TodoItem,
 };
 use crate::date::Date;
 use crate::keys;
@@ -47,6 +47,7 @@ pub struct App {
     pub last_mutated: Instant,
     pub pending_due_date: Option<String>,
     pub sidebar_width: u16,
+    pub note_hint: bool,
     category_selection_memory: HashMap<String, usize>,
     popup_back_stack: Vec<PopupBackTarget>,
     undo_stack: Vec<UndoEntry>,
@@ -63,6 +64,11 @@ enum UndoEntry {
         item_ids: Vec<u64>,
         category_names: Vec<String>,
         previous_archived: bool,
+    },
+    NoteDelete {
+        item_id: u64,
+        index: usize,
+        note: Note,
     },
 }
 
@@ -95,6 +101,7 @@ impl App {
             last_mutated: Instant::now(),
             pending_due_date: None,
             sidebar_width,
+            note_hint: false,
             category_selection_memory: HashMap::new(),
             popup_back_stack: Vec::new(),
             undo_stack: Vec::new(),
@@ -632,6 +639,20 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Opens the note log for `id` with the newest entry highlighted, since that
+    /// is the one you just wrote or came back to read.
+    fn open_notes(&mut self, id: u64) {
+        if self.data.get(id).is_none() {
+            return;
+        }
+        let selected = self.data.last_note_index(id);
+        self.input.clear();
+        self.mode = Mode::Notes {
+            item_id: id,
+            selected,
+        };
+    }
+
     fn mode_selection_max(&self) -> Option<usize> {
         match &self.mode {
             Mode::Command { .. } => Some(
@@ -655,6 +676,7 @@ impl App {
                 let single = ids.len() == 1 && category_names.is_empty();
                 Some(bulk_action_labels(single).len().saturating_sub(1))
             }
+            Mode::Notes { item_id, .. } => Some(self.data.last_note_index(*item_id)),
             Mode::CategoryFilterPicker { .. } => Some(self.category_entries().len()),
             Mode::CategoryCreateChoice { .. } => Some(1),
             Mode::CategoryParentPicker { .. } => {
@@ -729,6 +751,7 @@ impl App {
                         theme: &app.theme,
                         sort_mode: &app.sort_mode,
                         sidebar_width: app.sidebar_width,
+                        note_hint: app.note_hint,
                     },
                 )
             })?;
@@ -784,6 +807,8 @@ impl App {
                 | Mode::RenameInput { .. }
                 | Mode::CategoryPicker { .. }
                 | Mode::DueDateCalendar { .. }
+                | Mode::Notes { .. }
+                | Mode::NoteInput { .. }
         );
         if key.code == KeyCode::Char('k')
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -811,9 +836,22 @@ impl App {
         {
             return Some(Action::SetDueDate);
         }
+        if key.code == KeyCode::Char('n')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(&self.mode, Mode::Normal | Mode::Searching)
+            && self.pane == Pane::Items
+        {
+            if let Some(id) = self.items().get(self.selected_index()).map(|item| item.id) {
+                if matches!(&self.mode, Mode::Searching) {
+                    self.saved_search = Some(self.input.text().to_string());
+                    self.input.clear();
+                }
+                return Some(Action::OpenNotes(id));
+            }
+        }
         if key.code == KeyCode::Char('z')
             && key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(&self.mode, Mode::Normal)
+            && matches!(&self.mode, Mode::Normal | Mode::Notes { .. })
             && !self.undo_stack.is_empty()
         {
             return Some(Action::Undo);
@@ -1126,6 +1164,8 @@ impl App {
             Mode::DueDateCalendar { prompt_focused, .. } => {
                 keys::handle_due_date_calendar(key, &mut self.input, *prompt_focused)
             }
+            Mode::Notes { .. } => keys::handle_notes(key),
+            Mode::NoteInput { .. } => keys::handle_note_input(key, &mut self.input),
             Mode::Help | Mode::Keybindings => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Some(Action::CancelEdit),
                 _ => None,
@@ -1166,6 +1206,7 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) -> bool {
+        self.note_hint = false;
         match action {
             Action::SelectPrev => {
                 if self.move_mode_selection(-1) {
@@ -1327,6 +1368,12 @@ impl App {
             }
             Action::ToggleDone(id) => {
                 self.data.toggle_done(id);
+                // Just-completed items are the moment you have the outcome in hand,
+                // so nudge towards logging it — but only while there is nothing logged yet.
+                self.note_hint = self
+                    .data
+                    .get(id)
+                    .is_some_and(|item| item.done && item.notes.is_empty());
                 self.mark_dirty();
             }
             Action::ToggleDoing(id) => {
@@ -1672,6 +1719,17 @@ impl App {
                                 selected: 0,
                                 target: CategoryPickerTarget::AssignItem,
                             };
+                        }
+                    }
+                    "notes" | "n" => {
+                        let id = if self.pane == Pane::Items {
+                            self.items().get(self.selected_index()).map(|item| item.id)
+                        } else {
+                            None
+                        };
+                        match id {
+                            Some(id) => self.open_notes(id),
+                            None => self.mode = Mode::Normal,
                         }
                     }
                     "themes" => {
@@ -2550,6 +2608,22 @@ impl App {
                                 self.data.set_category_archived(&name, previous_archived);
                             }
                         }
+                        UndoEntry::NoteDelete {
+                            item_id,
+                            index,
+                            note,
+                        } => {
+                            self.data.restore_note(item_id, index, note);
+                            if let Mode::Notes {
+                                item_id: open_id,
+                                selected,
+                            } = &mut self.mode
+                            {
+                                if *open_id == item_id {
+                                    *selected = index;
+                                }
+                            }
+                        }
                     }
                     self.mark_dirty();
                     self.clamp_selection();
@@ -2614,11 +2688,142 @@ impl App {
                             self.mode = Mode::Editing { edit_id: Some(id) };
                         }
                     }
+                    "Notes" => {
+                        if !single {
+                            return false;
+                        }
+                        self.open_notes(ids[0]);
+                    }
                     _ => {}
                 }
             }
             Action::CancelBulkActionPicker => {
                 self.return_after_secondary_mode();
+            }
+            Action::OpenNotes(id) => {
+                self.open_notes(id);
+            }
+            Action::CloseNotes => {
+                self.input.clear();
+                self.return_after_secondary_mode();
+            }
+            Action::StartNoteAppend => {
+                let Mode::Notes { item_id, .. } = &self.mode else {
+                    return false;
+                };
+                let item_id = *item_id;
+                self.input.clear();
+                self.mode = Mode::NoteInput {
+                    item_id,
+                    edit_index: None,
+                };
+            }
+            Action::StartNoteAppendWithChar(c) => {
+                let Mode::Notes { item_id, .. } = &self.mode else {
+                    return false;
+                };
+                let item_id = *item_id;
+                self.input.clear();
+                self.input.insert_char(c);
+                self.mode = Mode::NoteInput {
+                    item_id,
+                    edit_index: None,
+                };
+            }
+            Action::StartNoteEdit => {
+                let Mode::Notes { item_id, selected } = &self.mode else {
+                    return false;
+                };
+                let (item_id, selected) = (*item_id, *selected);
+                let Some(text) = self
+                    .data
+                    .get(item_id)
+                    .and_then(|item| item.notes.get(selected))
+                    .map(|note| note.text.clone())
+                else {
+                    return false;
+                };
+                self.input.set_text(&text);
+                self.mode = Mode::NoteInput {
+                    item_id,
+                    edit_index: Some(selected),
+                };
+            }
+            Action::SubmitNote => {
+                let Mode::NoteInput {
+                    item_id,
+                    edit_index,
+                } = &self.mode
+                else {
+                    return false;
+                };
+                let (item_id, edit_index) = (*item_id, *edit_index);
+                let text = self.input.text().trim().to_string();
+
+                let selected = match edit_index {
+                    Some(index) => {
+                        if self.data.update_note(item_id, index, &text) {
+                            self.mark_dirty();
+                        }
+                        index
+                    }
+                    None => {
+                        if self.data.add_note(item_id, &text) {
+                            self.mark_dirty();
+                        }
+                        self.data.last_note_index(item_id)
+                    }
+                };
+
+                self.input.clear();
+                self.mode = Mode::Notes { item_id, selected };
+            }
+            Action::CancelNote => {
+                let Mode::NoteInput {
+                    item_id,
+                    edit_index,
+                } = &self.mode
+                else {
+                    return false;
+                };
+                let (item_id, edit_index) = (*item_id, *edit_index);
+                let selected = edit_index.unwrap_or_else(|| self.data.last_note_index(item_id));
+                self.input.clear();
+                self.mode = Mode::Notes { item_id, selected };
+            }
+            Action::DeleteNote => {
+                let Mode::Notes { item_id, selected } = &self.mode else {
+                    return false;
+                };
+                let (item_id, selected) = (*item_id, *selected);
+                if let Some(note) = self.data.delete_note(item_id, selected) {
+                    self.push_undo(UndoEntry::NoteDelete {
+                        item_id,
+                        index: selected,
+                        note,
+                    });
+                    self.mark_dirty();
+                    let next = selected.min(self.data.last_note_index(item_id));
+                    self.mode = Mode::Notes {
+                        item_id,
+                        selected: next,
+                    };
+                }
+            }
+            Action::YankNote => {
+                let Mode::Notes { item_id, selected } = &self.mode else {
+                    return false;
+                };
+                let text = self
+                    .data
+                    .get(*item_id)
+                    .and_then(|item| item.notes.get(*selected))
+                    .map(|note| note.text.clone());
+                if let Some(text) = text {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
             }
             Action::EnterResizeSidebar => {
                 let return_pane = self.pane;
@@ -2712,6 +2917,7 @@ pub(crate) fn bulk_action_labels(single_item: bool) -> Vec<&'static str> {
     let mut labels = vec!["Archive", "Assign category", "Delete", "Toggle done"];
     if single_item {
         labels.push("Edit");
+        labels.push("Notes");
     }
     labels.sort_unstable();
     labels

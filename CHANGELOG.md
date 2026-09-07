@@ -1,3 +1,22 @@
+# v0.9.0 — Notes
+
+## New
+- **Per-item note log (`Ctrl+N`, `/notes`).** Every item now carries an append-only list of dated one-line entries, for recording what came out of a task rather than just that it happened. Mark "call the doctor for a rdv" done and you can still keep the result — `no answer, retry morning`, then `rdv 15/09 10h30, bring the x-ray`. Entries are appended, never overwritten, so the history of a task stays readable.
+  - Inside the popup: `Enter` (or any printable character, which prefills it) appends an entry, `↑`/`↓` walk the log, `Ctrl+E` edits the highlighted entry, `Delete` removes it, `Ctrl+Y` copies it to the system clipboard, `Esc` closes.
+  - `Ctrl+Z` undoes a note deletion and restores the entry **at its original position** in the log. It works from inside the notes popup, so the undo is visible where you made the mistake.
+  - Reachable three ways: `Ctrl+N` on the selected item (also while `/search`ing — the query round-trips back on close, like `Ctrl+E`/`Ctrl+O` do), the `/notes` command, or the new `Notes` entry in the `/search` / `/select` action popup when the selection is a single item.
+  - Items with notes show a `📝 n` counter on their status row, right-aligned badge layout unaffected.
+  - Entries are stamped with the date they were written (no new dependency — reuses the existing `Date` code) and capped at 500 characters.
+- **A nudge at the moment you have the outcome.** Marking an item done shows a one-off `Ctrl+N to log what came out of it` reminder in the prompt bar, and only when that item has no notes yet. It disappears on the next keystroke — no popup, nothing to dismiss.
+
+## Fixes
+- **Keybindings popup listed the wrong key for "Assign cat" and sidebar "Move".** Both showed `Ctrl+K` (which opens the keybindings popup itself); the actual binding is `Ctrl+O`.
+
+## Storage
+- `todos.json` gains an optional `notes` array per item. Existing files load unchanged — items without the field simply start with an empty log. Notes survive delete + `Ctrl+Z`, archive/restore, category moves, and renames, since all of those already round-trip whole items.
+
+---
+
 # v0.8.2 — Fix test build
 
 ## Fixes

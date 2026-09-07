@@ -4,7 +4,11 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::date::Date;
+
 pub use storage::Storage;
+
+pub const NOTE_MAX_LEN: usize = 500;
 
 fn dedup_preserve_order(values: &mut Vec<String>) {
     let mut seen = HashSet::new();
@@ -42,6 +46,12 @@ impl Priority {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub created: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub id: u64,
     pub text: String,
@@ -58,6 +68,8 @@ pub struct TodoItem {
     pub category: Option<String>,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub notes: Vec<Note>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,9 +130,69 @@ impl TodoData {
             due_date: None,
             category: None,
             archived: false,
+            notes: Vec::new(),
         });
 
         id
+    }
+
+    pub fn add_note(&mut self, id: u64, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > NOTE_MAX_LEN {
+            return false;
+        }
+
+        match self.items.iter_mut().find(|i| i.id == id) {
+            Some(item) => {
+                item.notes.push(Note {
+                    created: Date::today().iso(),
+                    text: text.to_string(),
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn update_note(&mut self, id: u64, index: usize, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > NOTE_MAX_LEN {
+            return false;
+        }
+
+        let Some(item) = self.items.iter_mut().find(|i| i.id == id) else {
+            return false;
+        };
+        match item.notes.get_mut(index) {
+            Some(note) => {
+                note.text = text.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn delete_note(&mut self, id: u64, index: usize) -> Option<Note> {
+        let item = self.items.iter_mut().find(|i| i.id == id)?;
+        if index >= item.notes.len() {
+            return None;
+        }
+        Some(item.notes.remove(index))
+    }
+
+    pub fn restore_note(&mut self, id: u64, index: usize, note: Note) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            let index = index.min(item.notes.len());
+            item.notes.insert(index, note);
+        }
+    }
+
+    pub fn note_count(&self, id: u64) -> usize {
+        self.get(id).map_or(0, |item| item.notes.len())
+    }
+
+    pub fn last_note_index(&self, id: u64) -> usize {
+        self.note_count(id).saturating_sub(1)
     }
 
     pub fn update_text(&mut self, id: u64, text: &str) -> bool {
@@ -535,6 +607,82 @@ mod tests {
                 ("Work/work2", "work2", 1, false),
             ]
         );
+    }
+
+    #[test]
+    fn notes_append_in_order_with_a_creation_date() {
+        let mut data = TodoData::new();
+        let id = data.add("call for a rdv");
+
+        assert!(data.add_note(id, "no answer, retry morning"));
+        assert!(data.add_note(id, "  rdv 15/09 10h30  "));
+
+        let notes = &data.get(id).unwrap().notes;
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].text, "no answer, retry morning");
+        assert_eq!(notes[1].text, "rdv 15/09 10h30");
+        assert_eq!(notes[1].created, crate::date::Date::today().iso());
+    }
+
+    #[test]
+    fn notes_reject_empty_and_oversized_text() {
+        let mut data = TodoData::new();
+        let id = data.add("item");
+
+        assert!(!data.add_note(id, "   "));
+        assert!(!data.add_note(id, &"é".repeat(NOTE_MAX_LEN + 1)));
+        assert!(data.add_note(id, &"é".repeat(NOTE_MAX_LEN)));
+        assert_eq!(data.note_count(id), 1);
+    }
+
+    #[test]
+    fn notes_edit_and_delete_target_one_entry() {
+        let mut data = TodoData::new();
+        let id = data.add("item");
+        data.add_note(id, "first");
+        data.add_note(id, "second");
+
+        assert!(data.update_note(id, 0, "first, edited"));
+        assert!(!data.update_note(id, 9, "nowhere"));
+        assert!(!data.update_note(id, 0, ""));
+
+        let removed = data.delete_note(id, 0).unwrap();
+        assert_eq!(removed.text, "first, edited");
+        assert_eq!(data.note_count(id), 1);
+        assert!(data.delete_note(id, 5).is_none());
+
+        data.restore_note(id, 0, removed);
+        assert_eq!(data.get(id).unwrap().notes[0].text, "first, edited");
+        assert_eq!(data.get(id).unwrap().notes[1].text, "second");
+    }
+
+    #[test]
+    fn notes_survive_a_delete_undo_round_trip() {
+        let mut data = TodoData::new();
+        let id = data.add("item");
+        data.add_note(id, "kept through undo");
+
+        let snapshot = data.delete(id).unwrap();
+        data.restore_item(snapshot);
+
+        assert_eq!(data.get(id).unwrap().notes[0].text, "kept through undo");
+    }
+
+    #[test]
+    fn items_stored_without_notes_still_load() {
+        let json = r#"{
+            "next_id": 2,
+            "items": [{
+                "id": 1,
+                "text": "legacy item",
+                "done": false,
+                "priority": "normal",
+                "order": 0
+            }]
+        }"#;
+
+        let data: TodoData = serde_json::from_str(json).expect("legacy payload should load");
+        assert!(data.get(1).unwrap().notes.is_empty());
     }
 
     #[test]

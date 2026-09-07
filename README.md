@@ -14,7 +14,7 @@ Add to your `flake.nix` inputs:
 inputs = {
   # ... your other inputs
   todo-tui = {
-    url = "github:giorgoskouroupis/my-todo-tui/v0.8.2";
+    url = "github:giorgoskouroupis/my-todo-tui/v0.9.0";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 };
@@ -118,6 +118,7 @@ cargo deb
 | `PageUp` / `PageDown` | Switch category filter |
 | `Ctrl+O` | Assign category to selected item |
 | `Ctrl+D` | Open due-date calendar |
+| `Ctrl+N` | Open the note log for the selected item |
 | `Ctrl+B` | Resize sidebar (`←/→` ±1, `Shift+←/→` ±5, `r` reset, `Enter` save, `Esc` cancel) |
 | `/` | Command mode |
 | `Ctrl+Z` | Undo last delete or archive (up to 20 levels) |
@@ -127,7 +128,7 @@ cargo deb
 
 Any other printable character in the items pane starts a new todo prefilled with that character. In the sidebar it starts a new category.
 
-Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/reset`, `/themes`, `/sort`, `/sidebar`, `/help`, and `/keybindings`, plus unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. `/select` toggles into a generic bulk-select mode: `Space` toggles items/categories, `Ctrl+A` selects all, and `Enter` opens an action popup (`Delete`, `Archive`, `Toggle done`, `Assign category`, plus `Edit` when the selection is a single item) applied to the whole selection.
+Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/reset`, `/notes`, `/themes`, `/sort`, `/sidebar`, `/help`, and `/keybindings`, plus unified `/filter` subcommands, `/archive` subcommands, `/rename`, and `/move` to open the category picker. `/select` toggles into a generic bulk-select mode: `Space` toggles items/categories, `Ctrl+A` selects all, and `Enter` opens an action popup (`Delete`, `Archive`, `Toggle done`, `Assign category`, plus `Edit` when the selection is a single item) applied to the whole selection.
 
 `/search` types-to-filter live. `↑`/`↓` navigate the filtered list. Item shortcuts work on the highlighted result while typing: `Ctrl+P` / `Ctrl+Shift+P` cycle priority, `Ctrl+↑/↓` reorder, `Ctrl+*` toggle pin, `Ctrl+D` opens the due-date calendar, `Ctrl+E` edits the item, `Ctrl+O` assigns a category. `Enter` opens the same action popup as `/select` but on the single highlighted item (or press `Tab` first to promote into bulk-select mode on the currently filtered list, where `Space` toggles multiple items). All these round-trip back to the search prompt when the target flow finishes, so the query you were building is never lost. `Esc` clears the filter.
 
@@ -136,6 +137,24 @@ Command mode supports `/search`, `/delete`, `/done`, `/select`, `/clear`, `/rese
 Categories can be flat (`Dog`) or nested with `/` (`Work/work2`). The sidebar groups nested categories under their parent; selecting the parent includes both direct parent items and nested subcategories. In the sidebar, type a category name directly and press `Enter`; if categories already exist, the placement popup asks whether to attach under the highlighted category or create at root. From `All`, attach opens a parent picker. Manual `Parent/child` entry still works as a shortcut. Global `All` shows full badges like `[Work|work2]`; a parent filter like `Work` shows shorter child badges like `[work2]`.
 
 Due-date calendar keys: `Tab` switches focus between the calendar and the bottom date prompt. The popup opens near the selected item from Normal mode and near the input bar from editing/new-item flows; the rest of the UI is muted while the active calendar or prompt stays highlighted. In calendar focus, arrows move by day/week, `PageUp`/`PageDown` change month, `Ctrl+T` jumps to today, and `Delete` clears. In prompt focus, type digits or `-` to edit `YYYY-MM-DD`, and arrows move the cursor. `Enter` saves a valid date and `Esc` cancels. Due dates render muted by default, yellow within 10 days, and red within 3 days or overdue.
+
+## Notes
+
+Each item carries a note log: an append-only list of dated one-line entries, for recording what actually came out of a task. Mark "call the doctor for a rdv" done and you can still keep the result — `no answer, retry morning`, then `rdv 15/09 10h30, bring the x-ray`. New entries are appended rather than overwriting the previous one, so the history of a task stays readable.
+
+`Ctrl+N` (or `/notes`, or the `Notes` entry in the `/search`/`/select` action popup on a single item) opens the log for the selected item. Inside it:
+
+| Key | Action |
+|---|---|
+| `Enter` or any printable character | Append a new entry (the character prefills it) |
+| `↑` / `↓` | Walk the entries |
+| `Ctrl+E` | Edit the highlighted entry |
+| `Delete` | Delete the highlighted entry |
+| `Ctrl+Y` | Copy the highlighted entry to the system clipboard |
+| `Ctrl+Z` | Undo the last deletion (restored at its original position) |
+| `Esc` | Close |
+
+Entries are stamped with the date they were written and capped at 500 characters. Items with notes show a `📝 n` counter on their status row. Marking an item done shows a one-off reminder in the prompt bar when it has no notes yet — the moment you finish something is usually when you have the outcome in hand. Notes ride along with the item everywhere: archive, delete + `Ctrl+Z`, category moves, and rename all preserve them, and existing `todos.json` files load unchanged (items without notes simply start empty).
 
 ## Storage
 

@@ -236,6 +236,49 @@ pub fn handle_editing(key: KeyEvent, input: &mut crate::ui::input::InputBuffer) 
     }
 }
 
+pub fn handle_notes(key: KeyEvent) -> Option<Action> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('e') => Some(Action::StartNoteEdit),
+            KeyCode::Char('n') => Some(Action::StartNoteAppend),
+            KeyCode::Char('y') => Some(Action::YankNote),
+            _ => None,
+        };
+    }
+
+    match key.code {
+        KeyCode::Up => Some(Action::SelectPrev),
+        KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Enter => Some(Action::StartNoteAppend),
+        KeyCode::Delete => Some(Action::DeleteNote),
+        KeyCode::Esc => Some(Action::CloseNotes),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
+            Some(Action::StartNoteAppendWithChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn handle_note_input(
+    key: KeyEvent,
+    input: &mut crate::ui::input::InputBuffer,
+) -> Option<Action> {
+    match key.code {
+        KeyCode::Enter => Some(Action::SubmitNote),
+        KeyCode::Esc => Some(Action::CancelNote),
+        _ => {
+            if key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+                if let KeyCode::Char('V') = key.code {
+                    return Some(Action::Paste);
+                }
+            }
+
+            handle_text_input_key(key, input);
+            None
+        }
+    }
+}
+
 pub fn handle_confirm_delete(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Enter | KeyCode::Char('Y') | KeyCode::Char('y') => Some(Action::ConfirmDeleteYes),

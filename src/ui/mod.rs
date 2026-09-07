@@ -29,6 +29,7 @@ pub struct RenderState<'a> {
     pub theme: &'a Theme,
     pub sort_mode: &'a SortMode,
     pub sidebar_width: u16,
+    pub note_hint: bool,
 }
 
 pub fn render(frame: &mut Frame, state: RenderState<'_>) {
@@ -71,6 +72,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         state.input,
         state.mode,
         state.pane,
+        state.note_hint,
         base_theme,
     );
 
@@ -149,6 +151,28 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
         render_keybindings_popup(frame, popup_area, state.theme);
     } else if let Mode::ConfirmDelete { texts, .. } = state.mode {
         render_confirm_delete_popup(frame, popup_area, texts, state.theme);
+    } else if let Mode::Notes { item_id, selected } = state.mode {
+        render_notes_popup(
+            frame,
+            popup_area,
+            state.items,
+            *item_id,
+            Some(*selected),
+            state.theme,
+        );
+    } else if let Mode::NoteInput {
+        item_id,
+        edit_index,
+    } = state.mode
+    {
+        render_notes_popup(
+            frame,
+            popup_area,
+            state.items,
+            *item_id,
+            *edit_index,
+            state.theme,
+        );
     } else if let Mode::DueDateCalendar {
         selected,
         prompt_focused,
@@ -163,6 +187,7 @@ pub fn render(frame: &mut Frame, state: RenderState<'_>) {
                 state.input,
                 state.mode,
                 state.pane,
+                state.note_hint,
                 state.theme,
             );
         }
@@ -1374,6 +1399,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         Entry::Text("/clear          — clear completed items".into(), primary, "  "),
         Entry::Text("/archive        — archive items/categories (done, all, restore)".into(), primary, "  "),
         Entry::Text("/move           — move item or highlighted category".into(), primary, "  "),
+        Entry::Text("/notes          — note log for the current item (Ctrl+N)".into(), primary, "  "),
         Entry::Text("/rename         — rename current item/category".into(), primary, "  "),
         Entry::Text("/sidebar        — resize sidebar (Left/Right, Enter save)".into(), primary, "  "),
         Entry::Text("/themes         — pick a theme".into(), primary, "  "),
@@ -1459,7 +1485,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let key_lines: [(&str, &str, bool); 52] = [
+    let key_lines: &[(&str, &str, bool)] = &[
         ("Global", "", true),
         ("Ctrl+C", "Quit", false),
         ("Ctrl+H", "Help", false),
@@ -1473,8 +1499,9 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Ctrl+E", "Edit", false),
         ("Ctrl+P/S-P", "Priority", false),
         ("Ctrl+↑/↓", "Reorder", false),
-        ("Ctrl+K", "Assign cat", false),
+        ("Ctrl+O", "Assign cat", false),
         ("Ctrl+D", "Due date", false),
+        ("Ctrl+N", "Notes", false),
         ("*", "Pin", false),
         ("←/→", "Switch pane", false),
         ("Tab", "Switch pane", false),
@@ -1494,9 +1521,17 @@ fn render_keybindings_popup(frame: &mut Frame, area: Rect, theme: &Theme) {
         ("Multi-select", "", true),
         ("Ctrl+A", "Select all", false),
         ("", "", false),
+        ("Notes", "", true),
+        ("Enter", "Log a note", false),
+        ("printable", "Log a note", false),
+        ("Ctrl+E", "Edit note", false),
+        ("Delete", "Delete note", false),
+        ("Ctrl+Y", "Copy note", false),
+        ("Ctrl+Z", "Undo delete", false),
+        ("", "", false),
         ("Sidebar", "", true),
         ("Ctrl+↑/↓", "Reorder / move", false),
-        ("Ctrl+K", "Move", false),
+        ("Ctrl+O", "Move", false),
         ("Delete", "Delete branch", false),
         ("PgUp/PgDn", "Cycle filter", false),
         ("printable", "Create cat", false),
@@ -1675,6 +1710,186 @@ fn render_confirm_delete_popup(frame: &mut Frame, area: Rect, texts: &[String], 
     let paragraph = Paragraph::new(lines)
         .block(block)
         .alignment(Alignment::Center)
+        .style(Style::default().bg(theme.bg_secondary));
+
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(paragraph, popup_area);
+}
+
+/// One rendered line of a note log: `date` is set on a note's first line only,
+/// `offset` is where the text column starts (wrapped lines align under it).
+struct NoteRow {
+    date: Option<String>,
+    text: String,
+    offset: usize,
+    muted: bool,
+}
+
+fn note_row_width(row: &NoteRow) -> usize {
+    row.offset + row.text.chars().count()
+}
+
+/// Renders the note log of one item. Rows are grouped per note so a wrapped
+/// entry is never split across the scroll window boundary.
+fn render_notes_popup(
+    frame: &mut Frame,
+    area: Rect,
+    items: &[TodoItem],
+    item_id: u64,
+    selected: Option<usize>,
+    theme: &Theme,
+) {
+    let Some(item) = items.iter().find(|candidate| candidate.id == item_id) else {
+        return;
+    };
+
+    const TITLE_TEXT_MAX: usize = 28;
+    let label: String = item.text.chars().take(TITLE_TEXT_MAX).collect();
+    let title = if item.text.chars().count() > TITLE_TEXT_MAX {
+        format!(" Notes \u{2014} {label}\u{2026} ")
+    } else {
+        format!(" Notes \u{2014} {label} ")
+    };
+
+    // Row layout: indent + "YYYY-MM-DD" + gap + text; wrapped text aligns under the text column.
+    const INDENT: usize = 2;
+    const DATE_WIDTH: usize = 10;
+    const DATE_GAP: usize = 2;
+    let text_offset = INDENT + DATE_WIDTH + DATE_GAP;
+    let available = area.width.saturating_sub(4) as usize;
+    let text_width = available.saturating_sub(text_offset).clamp(12, 72);
+
+    let mut groups: Vec<(bool, Vec<NoteRow>)> = item
+        .notes
+        .iter()
+        .enumerate()
+        .map(|(i, note)| {
+            let rows: Vec<NoteRow> = wrap_text(&note.text, text_width)
+                .into_iter()
+                .enumerate()
+                .map(|(j, seg)| NoteRow {
+                    date: (j == 0).then(|| note.created.clone()),
+                    text: seg,
+                    offset: text_offset,
+                    muted: false,
+                })
+                .collect();
+            (selected == Some(i), rows)
+        })
+        .collect();
+
+    if groups.is_empty() {
+        groups.push((
+            false,
+            vec![NoteRow {
+                date: None,
+                text: "No notes yet \u{2014} type or press Enter to log one".to_string(),
+                offset: INDENT,
+                muted: true,
+            }],
+        ));
+    }
+
+    let max_rows = area.height.saturating_sub(3).max(1) as usize;
+    let focus = selected.unwrap_or(groups.len() - 1).min(groups.len() - 1);
+    let mut used_rows = groups[focus].1.len().min(max_rows);
+    let mut start = focus;
+    let mut end = focus + 1;
+    while start > 0 {
+        let prev = groups[start - 1].1.len();
+        if used_rows + prev > max_rows {
+            break;
+        }
+        used_rows += prev;
+        start -= 1;
+    }
+    while end < groups.len() {
+        let next = groups[end].1.len();
+        if used_rows + next > max_rows {
+            break;
+        }
+        used_rows += next;
+        end += 1;
+    }
+
+    let longest = groups[start..end]
+        .iter()
+        .flat_map(|(_, rows)| rows.iter())
+        .map(note_row_width)
+        .max()
+        .unwrap_or(0);
+    let title_width = title.chars().count();
+    let width = ((longest + 2).max(title_width + 2) as u16)
+        .max(44)
+        .min(area.width.saturating_sub(2));
+    let inner = width.saturating_sub(2) as usize;
+
+    let lines: Vec<Line<'static>> = groups[start..end]
+        .iter()
+        .flat_map(|(highlighted, rows)| {
+            rows.iter().map(move |row| {
+                let bg = if *highlighted {
+                    theme.bg_tertiary
+                } else {
+                    theme.bg_secondary
+                };
+                let text_style = Style::default()
+                    .fg(if row.muted {
+                        theme.text_muted
+                    } else {
+                        theme.text_primary
+                    })
+                    .add_modifier(if *highlighted {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    });
+
+                let mut spans = Vec::new();
+                match &row.date {
+                    Some(date) => {
+                        let cell: String = date.chars().take(DATE_WIDTH).collect();
+                        spans.push(Span::raw(" ".repeat(INDENT)));
+                        spans.push(Span::styled(
+                            format!("{cell:<width$}", width = DATE_WIDTH + DATE_GAP),
+                            Style::default().fg(theme.text_muted),
+                        ));
+                    }
+                    None => spans.push(Span::raw(" ".repeat(row.offset))),
+                }
+                spans.push(Span::styled(row.text.clone(), text_style));
+                let pad = inner.saturating_sub(note_row_width(row));
+                if pad > 0 {
+                    spans.push(Span::raw(" ".repeat(pad)));
+                }
+                Line::from(spans).style(Style::default().bg(bg))
+            })
+        })
+        .take(max_rows)
+        .collect();
+
+    let height = lines.len() as u16 + 2;
+    let popup_y = area.bottom().saturating_sub(height + 1);
+    let popup_area = Rect::new(
+        area.x + 2,
+        popup_y.min(area.bottom().saturating_sub(height)),
+        width,
+        height,
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg_secondary));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
         .style(Style::default().bg(theme.bg_secondary));
 
     frame.render_widget(Clear, popup_area);
@@ -1907,6 +2122,7 @@ fn render_input(
     input: &InputBuffer,
     mode: &Mode,
     pane: &Pane,
+    note_hint: bool,
     theme: &Theme,
 ) {
     let block = Block::default()
@@ -2128,6 +2344,23 @@ fn render_input(
             ));
             (line.style(Style::default().bg(theme.bg_primary)), None)
         }
+        Mode::Notes { .. } => {
+            let line = Line::from(vec![Span::styled(
+                "  [Enter/type add, Ctrl+E edit, Del delete, Ctrl+Y copy, Ctrl+Z undo, Esc close]",
+                Style::default().fg(theme.warning),
+            )]);
+            (line, None)
+        }
+        Mode::NoteInput { edit_index, .. } => {
+            let label = if edit_index.is_some() {
+                "  Edit note: "
+            } else {
+                "  New note: "
+            };
+            let line =
+                render_prompt_input_line(label, input.text(), input.cursor(), input_width, theme);
+            (line, None)
+        }
         Mode::RenameInput { .. } => {
             let line = render_prompt_input_line(
                 "  Rename to: ",
@@ -2151,10 +2384,17 @@ fn render_input(
             (line, None)
         }
         _ if input.is_empty() && matches!(mode, Mode::Normal) => {
-            let placeholder = Line::from(vec![Span::styled(
-                "  Type to add or / for commands",
-                Style::default().fg(theme.text_placeholder),
-            )]);
+            let placeholder = if note_hint {
+                Line::from(vec![Span::styled(
+                    "  Done \u{2014} Ctrl+N to log what came out of it",
+                    Style::default().fg(theme.warning),
+                )])
+            } else {
+                Line::from(vec![Span::styled(
+                    "  Type to add or / for commands",
+                    Style::default().fg(theme.text_placeholder),
+                )])
+            };
             (placeholder, None)
         }
         _ => {

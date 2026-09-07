@@ -31,6 +31,7 @@ fn test_app(data: TodoData) -> App {
         last_mutated: Instant::now(),
         pending_due_date: None,
         sidebar_width: super::SIDEBAR_WIDTH_DEFAULT,
+        note_hint: false,
         category_selection_memory: HashMap::new(),
         popup_back_stack: Vec::new(),
         undo_stack: Vec::new(),
@@ -1838,4 +1839,240 @@ fn ctrl_z_after_archive_all_restores_all_visible_items() {
     app.handle_action(Action::Undo);
     assert!(!app.data.get(a).unwrap().archived);
     assert!(!app.data.get(b).unwrap().archived);
+}
+
+#[test]
+fn ctrl_n_opens_the_note_log_on_the_selected_item() {
+    let mut data = TodoData::new();
+    let id = data.add("call the doctor for a rdv");
+    let mut app = test_app(data);
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::OpenNotes(target)) if target == id));
+    app.handle_action(action.unwrap());
+    assert!(matches!(app.mode, Mode::Notes { item_id, selected: 0 } if item_id == id));
+}
+
+#[test]
+fn ctrl_n_is_inert_when_the_list_is_empty() {
+    let mut app = test_app(TodoData::new());
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(action.is_none());
+}
+
+#[test]
+fn typing_in_the_note_log_appends_a_timestamped_entry() {
+    let mut data = TodoData::new();
+    let id = data.add("call the doctor for a rdv");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::StartNoteAppendWithChar('r'))));
+    app.handle_action(action.unwrap());
+    assert_eq!(app.input.text(), "r");
+
+    for c in "dv 15/09".chars() {
+        app.dispatch_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::SubmitNote)));
+    app.handle_action(action.unwrap());
+
+    let notes = &app.data.get(id).unwrap().notes;
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].text, "rdv 15/09");
+    assert_eq!(notes[0].created, crate::date::Date::today().iso());
+    // Back to browsing, highlighting the entry just written.
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+    assert!(app.input.is_empty());
+}
+
+#[test]
+fn empty_note_submit_keeps_the_log_untouched() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    app.handle_action(Action::StartNoteAppendWithChar(' '));
+    app.handle_action(Action::SubmitNote);
+
+    assert!(app.data.get(id).unwrap().notes.is_empty());
+    assert!(matches!(app.mode, Mode::Notes { .. }));
+}
+
+#[test]
+fn editing_a_note_replaces_only_that_entry() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    data.add_note(id, "first");
+    data.add_note(id, "second");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    // Opens on the newest entry.
+    assert!(matches!(app.mode, Mode::Notes { selected: 1, .. }));
+    app.handle_action(Action::SelectPrev);
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+
+    app.handle_action(Action::StartNoteEdit);
+    assert_eq!(app.input.text(), "first");
+    app.input.set_text("first, corrected");
+    app.handle_action(Action::SubmitNote);
+
+    let notes = &app.data.get(id).unwrap().notes;
+    assert_eq!(notes[0].text, "first, corrected");
+    assert_eq!(notes[1].text, "second");
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+}
+
+#[test]
+fn cancelling_a_note_edit_leaves_the_entry_alone() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    data.add_note(id, "untouched");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    app.handle_action(Action::StartNoteEdit);
+    app.input.set_text("discarded");
+    app.handle_action(Action::CancelNote);
+
+    assert_eq!(app.data.get(id).unwrap().notes[0].text, "untouched");
+    assert!(app.input.is_empty());
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+}
+
+#[test]
+fn ctrl_z_restores_a_deleted_note_in_place() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    data.add_note(id, "first");
+    data.add_note(id, "second");
+    data.add_note(id, "third");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    app.handle_action(Action::SelectPrev);
+    app.handle_action(Action::DeleteNote);
+    let texts: Vec<&str> = app
+        .data
+        .get(id)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|note| note.text.as_str())
+        .collect();
+    assert_eq!(texts, vec!["first", "third"]);
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::Undo)));
+    app.handle_action(action.unwrap());
+
+    let texts: Vec<&str> = app
+        .data
+        .get(id)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|note| note.text.as_str())
+        .collect();
+    assert_eq!(texts, vec!["first", "second", "third"]);
+    assert!(matches!(app.mode, Mode::Notes { selected: 1, .. }));
+}
+
+#[test]
+fn deleting_the_last_note_clamps_the_highlight() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    data.add_note(id, "only");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::OpenNotes(id));
+    app.handle_action(Action::DeleteNote);
+
+    assert!(app.data.get(id).unwrap().notes.is_empty());
+    assert!(matches!(app.mode, Mode::Notes { selected: 0, .. }));
+}
+
+#[test]
+fn closing_the_note_log_returns_to_the_search_prompt() {
+    let mut data = TodoData::new();
+    let id = data.add("call the doctor");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ExecuteCommand("search doctor".to_string()));
+    assert!(matches!(app.mode, Mode::Searching));
+
+    let action = app.dispatch_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(matches!(action, Some(Action::OpenNotes(target)) if target == id));
+    app.handle_action(action.unwrap());
+    app.handle_action(Action::CloseNotes);
+
+    assert!(matches!(app.mode, Mode::Searching));
+    assert_eq!(app.input.text(), "doctor");
+    assert_eq!(app.filter, "doctor");
+}
+
+#[test]
+fn notes_command_opens_the_log_for_the_selected_item() {
+    let mut data = TodoData::new();
+    data.add("first");
+    let second = data.add("second");
+    let mut app = test_app(data);
+    app.selected_index = 1;
+
+    app.handle_action(Action::ExecuteCommand("notes".to_string()));
+    assert!(matches!(app.mode, Mode::Notes { item_id, .. } if item_id == second));
+}
+
+#[test]
+fn notes_command_in_the_sidebar_is_a_no_op() {
+    let mut data = TodoData::new();
+    data.add("first");
+    let mut app = test_app(data);
+    app.pane = Pane::Categories;
+
+    app.handle_action(Action::ExecuteCommand("notes".to_string()));
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
+fn bulk_action_picker_offers_notes_for_a_single_item() {
+    let mut data = TodoData::new();
+    let id = data.add("item");
+    let mut app = test_app(data);
+
+    app.mode = Mode::BulkActionPicker {
+        ids: vec![id],
+        category_names: Vec::new(),
+        selected: 0,
+    };
+    let labels = super::bulk_action_labels(true);
+    let idx = labels.iter().position(|label| *label == "Notes").unwrap();
+    app.handle_action(Action::BulkActionSelect(idx));
+
+    assert!(matches!(app.mode, Mode::Notes { item_id, .. } if item_id == id));
+    assert!(!super::bulk_action_labels(false).contains(&"Notes"));
+}
+
+#[test]
+fn marking_an_item_done_hints_at_logging_the_outcome() {
+    let mut data = TodoData::new();
+    let id = data.add("call for a rdv");
+    let mut app = test_app(data);
+
+    app.handle_action(Action::ToggleDone(id));
+    assert!(app.note_hint);
+
+    // Any other action drops the hint, and it never returns for an item
+    // that already carries a note.
+    app.handle_action(Action::SelectNext);
+    assert!(!app.note_hint);
+
+    app.data.add_note(id, "rdv booked");
+    app.handle_action(Action::ToggleDone(id));
+    app.handle_action(Action::ToggleDone(id));
+    assert!(!app.note_hint);
 }

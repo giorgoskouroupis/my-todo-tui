@@ -112,6 +112,14 @@ pub enum Mode {
         return_pane: Pane,
         original_width: u16,
     },
+    Notes {
+        item_id: u64,
+        selected: usize,
+    },
+    NoteInput {
+        item_id: u64,
+        edit_index: Option<usize>,
+    },
 }
 
 impl Mode {
@@ -128,7 +136,8 @@ impl Mode {
             | Self::ArchivePicker { selected }
             | Self::BulkActionPicker { selected, .. }
             | Self::FilterPicker { selected }
-            | Self::DueDateFilterPicker { selected } => Some(selected),
+            | Self::DueDateFilterPicker { selected }
+            | Self::Notes { selected, .. } => Some(selected),
             _ => None,
         }
     }
@@ -220,6 +229,15 @@ pub enum Action {
     SwitchCategoryFilter(i32, bool),
     Undo,
     Quit,
+    OpenNotes(u64),
+    CloseNotes,
+    StartNoteAppend,
+    StartNoteAppendWithChar(char),
+    StartNoteEdit,
+    SubmitNote,
+    CancelNote,
+    DeleteNote,
+    YankNote,
     EnterResizeSidebar,
     ResizeSidebar(i16),
     ResetSidebarWidth,

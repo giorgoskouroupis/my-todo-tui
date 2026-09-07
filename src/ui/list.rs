@@ -124,6 +124,13 @@ pub fn render_item(
         line1.push(Span::raw(" \u{1F4C5} "));
         line1.push(Span::styled(date.clone(), Style::default().fg(date_color)));
     }
+    if !item.notes.is_empty() {
+        line1.push(Span::raw(" \u{1F4DD} "));
+        line1.push(Span::styled(
+            item.notes.len().to_string(),
+            Style::default().fg(theme.text_muted),
+        ));
+    }
     let badge_span = item.category.as_ref().and_then(|cat| {
         category_badge(cat, category_filter).map(|badge| {
             Span::styled(
