@@ -15,6 +15,28 @@ fn dedup_preserve_order(values: &mut Vec<String>) {
     values.retain(|value| seen.insert(value.clone()));
 }
 
+fn category_root(path: &str) -> &str {
+    path.split_once('/').map_or(path, |(root, _)| root)
+}
+
+/// Keep every category sharing a root contiguous, so a child added long after
+/// its siblings still lands in the same group. Roots keep the order they first
+/// appear in, and children keep their order inside a group.
+fn group_categories(values: &mut Vec<String>) {
+    let mut roots: Vec<String> = Vec::new();
+    for value in values.iter() {
+        let root = category_root(value);
+        if !roots.iter().any(|known| known == root) {
+            roots.push(root.to_string());
+        }
+    }
+
+    values.sort_by_key(|value| {
+        let root = category_root(value);
+        roots.iter().position(|known| known == root)
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
@@ -262,6 +284,7 @@ impl TodoData {
                 }
             }
         }
+        group_categories(&mut cats);
         cats
     }
 
@@ -324,6 +347,7 @@ impl TodoData {
         if let Some(name) = normalize_category(name) {
             if !self.categories.contains(&name) {
                 self.categories.push(name.clone());
+                group_categories(&mut self.categories);
             }
             self.archived_categories.retain(|c| c != &name);
         }
@@ -382,6 +406,7 @@ impl TodoData {
             }
         }
         dedup_preserve_order(&mut self.categories);
+        group_categories(&mut self.categories);
         for category in &mut self.archived_categories {
             if category == old {
                 *category = new.clone();
@@ -392,6 +417,7 @@ impl TodoData {
             }
         }
         dedup_preserve_order(&mut self.archived_categories);
+        group_categories(&mut self.archived_categories);
         changed
     }
 
@@ -472,7 +498,13 @@ impl TodoData {
 
     pub fn load() -> Self {
         match Storage::load() {
-            Ok(data) => data,
+            Ok(mut data) => {
+                // Files written before grouping was enforced can hold scattered
+                // siblings; regroup them once so reordering works on them too.
+                group_categories(&mut data.categories);
+                group_categories(&mut data.archived_categories);
+                data
+            }
             Err(reason) => {
                 Storage::backup_corrupt(&reason);
                 let empty = TodoData::new();
@@ -504,6 +536,7 @@ fn move_category_branch(from: &mut Vec<String>, to: &mut Vec<String>, name: &str
 
     to.extend(moved);
     dedup_preserve_order(to);
+    group_categories(to);
 }
 
 pub fn normalize_category(name: &str) -> Option<String> {
@@ -592,6 +625,31 @@ mod tests {
                 ("Work", "Work", 0, false),
                 ("Work/work1", "work1", 1, false),
                 ("Work/work2", "work2", 1, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn category_entries_group_children_added_after_another_root() {
+        let mut data = TodoData::new();
+        data.add_category("TRACE/Experiments");
+        data.add_category("Personal/errands");
+        data.add_category("TRACE/Vitrine");
+
+        let rows: Vec<(&str, usize)> = data
+            .category_entries()
+            .iter()
+            .map(|entry| (entry.label.as_str(), entry.depth))
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("TRACE", 0),
+                ("Experiments", 1),
+                ("Vitrine", 1),
+                ("Personal", 0),
+                ("errands", 1),
             ]
         );
     }
