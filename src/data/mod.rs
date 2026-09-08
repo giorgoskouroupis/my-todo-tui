@@ -636,8 +636,8 @@ mod tests {
         data.add_category("Personal/errands");
         data.add_category("TRACE/Vitrine");
 
-        let rows: Vec<(&str, usize)> = data
-            .category_entries()
+        let entries = data.category_entries();
+        let rows: Vec<(&str, usize)> = entries
             .iter()
             .map(|entry| (entry.label.as_str(), entry.depth))
             .collect();
