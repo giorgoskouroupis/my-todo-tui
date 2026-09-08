@@ -1,3 +1,12 @@
+# v0.9.1
+
+## Fixes
+- **Sub-lists created later no longer split their parent into two sidebar groups.** The category tree was built by walking the stored category list and grouping only *contiguous* runs, while new categories were appended to the end of that list. So creating `TRACE/g[plve` after `Personal/ouherjnegv` broke the run and the sidebar drew a second `TRACE` header below `Personal` instead of adding the child to the group already on screen. Categories are now kept grouped by root: roots hold the order they first appeared in, children hold their order inside a group, and the regrouping runs everywhere the list can get scattered — creating, renaming, archiving/restoring, and the read path that appends categories discovered on items.
+- **Moving a sub-list up or down inside a split group did nothing.** `reorder_category` derives a group's bounds from the contiguous run around the entry, so once a group was split by an unrelated root the bounds were wrong and the move was rejected or clamped to the wrong end. Fixed by the same grouping.
+
+## Storage
+- `todos.json` is unchanged in shape. Existing files are regrouped once on load, so a file already holding scattered siblings is corrected without a manual edit; the new order is written out on the next save.
+
 # v0.9.0 — Notes
 
 ## New
